@@ -3,6 +3,7 @@ Main FastMCP server file for the Borsa Istanbul (BIST) data service.
 This version uses KAP for company search and yfinance for all financial data.
 """
 import logging
+import math
 import os
 import ssl
 from datetime import datetime
@@ -576,6 +577,15 @@ async def hisse_analiz_et(
             "error": f"Technical analysis failed: {str(e)}"
         }
 
+def safe_float_check(value):
+    """Check if a value is a safe float (not NaN or Inf)."""
+    if value is None:
+        return False
+    try:
+        return not (math.isnan(float(value)) or math.isinf(float(value)))
+    except (TypeError, ValueError):
+        return False
+
 def generate_comprehensive_evaluation(analysis_data: Dict[str, Any]) -> str:
     """Generate comprehensive evaluation based on technical indicators."""
     evaluation = []
@@ -599,8 +609,8 @@ def generate_comprehensive_evaluation(analysis_data: Dict[str, Any]) -> str:
         evaluation.append("⚖️ NÖTR DURUM: Piyasa belirsizlik içinde, yön arayışı devam ediyor.")
     
     # RSI evaluation
-    rsi = indicators.get("rsi")
-    if rsi:
+    rsi = indicators.get("rsi_14")  # Use the correct key
+    if rsi and safe_float_check(rsi):
         if rsi < 30:
             evaluation.append(f"• RSI ({rsi:.1f}): Aşırı satım bölgesinde - güçlü toparlanma potansiyeli")
         elif rsi < 40:
@@ -615,7 +625,7 @@ def generate_comprehensive_evaluation(analysis_data: Dict[str, Any]) -> str:
     # Stochastic evaluation
     stoch_k = indicators.get("stochastic_k")
     stoch_d = indicators.get("stochastic_d")
-    if stoch_k and stoch_d:
+    if stoch_k and stoch_d and safe_float_check(stoch_k) and safe_float_check(stoch_d):
         if stoch_k < 20 and stoch_d < 20:
             evaluation.append(f"• Stochastic (%K={stoch_k:.1f}, %D={stoch_d:.1f}): Güçlü aşırı satım - yakın zamanda tepki beklenebilir")
         elif stoch_k > 80 and stoch_d > 80:
@@ -627,7 +637,7 @@ def generate_comprehensive_evaluation(analysis_data: Dict[str, Any]) -> str:
     
     # ADX evaluation for trend strength
     adx = indicators.get("adx")
-    if adx:
+    if adx and safe_float_check(adx):
         if adx < 25:
             evaluation.append(f"• ADX ({adx:.1f}): Zayıf trend - yatay piyasa, range trading uygun")
         elif adx < 50:
@@ -685,8 +695,8 @@ def generate_deep_recommendations(analysis_data: Dict[str, Any]) -> Dict[str, Li
         recommendations["kisa_vadeli_yatirimci"].append("👀 Hacim artışı ve yön oluşumunu takip edin")
     
     # Medium-term investor recommendations
-    rsi = indicators.get("rsi", 50)
-    adx = indicators.get("adx", 25)
+    rsi = indicators.get("rsi_14", 50) if safe_float_check(indicators.get("rsi_14")) else 50
+    adx = indicators.get("adx", 25) if safe_float_check(indicators.get("adx")) else 25
     
     if rsi < 40 and adx > 25:
         recommendations["orta_vadeli_yatirimci"].append("🎯 Güçlü alım fırsatı")
@@ -717,7 +727,7 @@ def generate_deep_recommendations(analysis_data: Dict[str, Any]) -> Dict[str, Li
     recommendations["risk_yonetimi"].append("🔄 Trailing stop: Kar %5'i geçince aktifleştirin")
     
     # Entry strategy
-    stoch_k = indicators.get("stochastic_k", 50)
+    stoch_k = indicators.get("stochastic_k", 50) if safe_float_check(indicators.get("stochastic_k")) else 50
     if stoch_k < 30:
         recommendations["giris_stratejisi"].append("✅ Agresif giriş yapılabilir")
         recommendations["giris_stratejisi"].append("🎯 İlk giriş: Pozisyonun %40'ı")

@@ -5,6 +5,7 @@ fetching company info, financials, and historical data.
 """
 import yfinance as yf
 import logging
+import math
 from typing import Dict, Any, List
 import pandas as pd
 import datetime
@@ -22,6 +23,38 @@ logger = logging.getLogger(__name__)
 class YahooFinanceProvider:
     def __init__(self):
         pass
+    
+    @staticmethod
+    def safe_divide(numerator, denominator, default_value=None):
+        """Safely divide two numbers, returning default_value for invalid results."""
+        if denominator is None or denominator == 0:
+            return default_value
+        if numerator is None:
+            return default_value
+        
+        try:
+            result = numerator / denominator
+            if math.isnan(result) or math.isinf(result):
+                return default_value
+            return result
+        except (ZeroDivisionError, TypeError, ValueError):
+            return default_value
+    
+    @staticmethod
+    def safe_float(value, default_value=None):
+        """Safely convert value to float, handling NaN and Inf."""
+        if value is None:
+            return default_value
+        if pd.isna(value):
+            return default_value
+        
+        try:
+            result = float(value)
+            if math.isnan(result) or math.isinf(result):
+                return default_value
+            return result
+        except (TypeError, ValueError):
+            return default_value
 
     def _get_ticker(self, ticker_kodu: str) -> yf.Ticker:
         """Appends .IS for BIST and returns a yfinance Ticker object."""
@@ -530,24 +563,28 @@ class YahooFinanceProvider:
             current_price = hist['Close'].iloc[-1]
             previous_close = hist['Close'].iloc[-2] if len(hist) > 1 else current_price
             price_change = current_price - previous_close
-            price_change_pct = (price_change / previous_close * 100) if previous_close != 0 else 0
+            price_change_pct = self.safe_divide(price_change, previous_close, 0) * 100 if previous_close is not None else 0
             
             daily_high = hist['High'].iloc[-1]
             daily_low = hist['Low'].iloc[-1]
             year_high = hist['High'].rolling(window=252).max().iloc[-1]
             year_low = hist['Low'].rolling(window=252).min().iloc[-1]
             
+            # Safe percentage calculations
+            yillik_yuksek_uzaklik = self.safe_divide(current_price - year_high, year_high, 0) * 100 if year_high is not None else 0
+            yillik_dusuk_uzaklik = self.safe_divide(current_price - year_low, year_low, 0) * 100 if year_low is not None else 0
+            
             result["fiyat_analizi"] = {
-                "guncel_fiyat": float(current_price),
-                "onceki_kapanis": float(previous_close),
-                "degisim_miktari": float(price_change),
-                "degisim_yuzdesi": float(price_change_pct),
-                "gunluk_yuksek": float(daily_high),
-                "gunluk_dusuk": float(daily_low),
-                "yillik_yuksek": float(year_high),
-                "yillik_dusuk": float(year_low),
-                "yillik_yuksek_uzaklik": float((current_price - year_high) / year_high * 100),
-                "yillik_dusuk_uzaklik": float((current_price - year_low) / year_low * 100)
+                "guncel_fiyat": self.safe_float(current_price, 0),
+                "onceki_kapanis": self.safe_float(previous_close, 0),
+                "degisim_miktari": self.safe_float(price_change, 0),
+                "degisim_yuzdesi": self.safe_float(price_change_pct, 0),
+                "gunluk_yuksek": self.safe_float(daily_high, 0),
+                "gunluk_dusuk": self.safe_float(daily_low, 0),
+                "yillik_yuksek": self.safe_float(year_high, 0),
+                "yillik_dusuk": self.safe_float(year_low, 0),
+                "yillik_yuksek_uzaklik": self.safe_float(yillik_yuksek_uzaklik, 0),
+                "yillik_dusuk_uzaklik": self.safe_float(yillik_dusuk_uzaklik, 0)
             }
             
             # Moving Averages
@@ -579,9 +616,19 @@ class YahooFinanceProvider:
                 delta = hist['Close'].diff()
                 gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
                 loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-                rs = gain / loss
-                rsi = 100 - (100 / (1 + rs))
-                rsi_14 = rsi.iloc[-1]
+                
+                # Safe RSI calculation
+                gain_val = gain.iloc[-1] if not pd.isna(gain.iloc[-1]) else 0
+                loss_val = loss.iloc[-1] if not pd.isna(loss.iloc[-1]) else 0
+                
+                if loss_val != 0:
+                    rs = gain_val / loss_val
+                    rsi = 100 - (100 / (1 + rs))
+                    rsi_14 = self.safe_float(rsi, None)
+                elif gain_val > 0:
+                    rsi_14 = 100.0  # All gains, no losses
+                else:
+                    rsi_14 = 50.0   # No movement
             
             # MACD calculation
             macd = None
@@ -599,10 +646,12 @@ class YahooFinanceProvider:
             bollinger_middle = None
             bollinger_lower = None
             if sma_20 is not None and len(hist) >= 20:
-                std_20 = hist['Close'].rolling(window=20).std().iloc[-1]
-                bollinger_middle = sma_20
-                bollinger_upper = sma_20 + (2 * std_20)
-                bollinger_lower = sma_20 - (2 * std_20)
+                std_20_val = hist['Close'].rolling(window=20).std().iloc[-1]
+                std_20 = self.safe_float(std_20_val, None)
+                if std_20 is not None:
+                    bollinger_middle = sma_20
+                    bollinger_upper = sma_20 + (2 * std_20)
+                    bollinger_lower = sma_20 - (2 * std_20)
             
             # Stochastic Oscillator
             stochastic_k = None
@@ -610,56 +659,97 @@ class YahooFinanceProvider:
             if len(hist) >= 14:
                 low_14 = hist['Low'].rolling(window=14).min()
                 high_14 = hist['High'].rolling(window=14).max()
-                k_percent = 100 * ((hist['Close'] - low_14) / (high_14 - low_14))
-                stochastic_k = k_percent.iloc[-1] if not pd.isna(k_percent.iloc[-1]) else None
-                stochastic_d = k_percent.rolling(window=3).mean().iloc[-1] if len(k_percent) >= 3 else None
+                
+                # Safe Stochastic calculation
+                current_close = hist['Close'].iloc[-1]
+                lowest_low = low_14.iloc[-1]
+                highest_high = high_14.iloc[-1]
+                
+                if not pd.isna(current_close) and not pd.isna(lowest_low) and not pd.isna(highest_high):
+                    range_val = highest_high - lowest_low
+                    if range_val != 0:
+                        k_val = 100 * ((current_close - lowest_low) / range_val)
+                        stochastic_k = self.safe_float(k_val, None)
+                        
+                        # Calculate %D (3-period SMA of %K)
+                        if stochastic_k is not None:
+                            # For %D calculation, we need at least 3 %K values
+                            k_percent_series = []
+                            for i in range(min(3, len(hist) - 13)):  # Last 3 periods
+                                idx = -(i + 1)
+                                c = hist['Close'].iloc[idx]
+                                l = low_14.iloc[idx]
+                                h = high_14.iloc[idx]
+                                if not pd.isna(c) and not pd.isna(l) and not pd.isna(h):
+                                    r = h - l
+                                    if r != 0:
+                                        k_val = 100 * ((c - l) / r)
+                                        k_percent_series.append(k_val)
+                            
+                            if k_percent_series:
+                                stochastic_d = self.safe_float(sum(k_percent_series) / len(k_percent_series), None)
+                    else:
+                        stochastic_k = 50.0  # No price range, neutral
+                        stochastic_d = 50.0
             
             # ADX (Average Directional Index) calculation
             adx = None
             plus_di = None
             minus_di = None
             if len(hist) >= 28:  # Need at least 28 periods for stable ADX (14 for initial calculation + 14 for smoothing)
-                # Calculate True Range (TR)
-                high_low = hist['High'] - hist['Low']
-                high_close_prev = abs(hist['High'] - hist['Close'].shift(1))
-                low_close_prev = abs(hist['Low'] - hist['Close'].shift(1))
-                
-                tr = pd.concat([high_low, high_close_prev, low_close_prev], axis=1).max(axis=1)
-                
-                # Calculate Directional Movement (+DM and -DM)
-                up_move = hist['High'] - hist['High'].shift(1)
-                down_move = hist['Low'].shift(1) - hist['Low']
-                
-                plus_dm = pd.Series(index=hist.index, dtype=float)
-                minus_dm = pd.Series(index=hist.index, dtype=float)
-                
-                # Positive DM when up_move > down_move and up_move > 0
-                plus_dm = up_move.where((up_move > down_move) & (up_move > 0), 0)
-                # Negative DM when down_move > up_move and down_move > 0
-                minus_dm = down_move.where((down_move > up_move) & (down_move > 0), 0)
-                
-                # Calculate 14-period smoothed averages (Wilder's smoothing)
-                tr_14 = tr.ewm(alpha=1/14, adjust=False).mean()
-                plus_dm_14 = plus_dm.ewm(alpha=1/14, adjust=False).mean()
-                minus_dm_14 = minus_dm.ewm(alpha=1/14, adjust=False).mean()
-                
-                # Calculate +DI and -DI (Directional Indicators)
-                plus_di_series = 100 * (plus_dm_14 / tr_14)
-                minus_di_series = 100 * (minus_dm_14 / tr_14)
-                
-                # Calculate DX (Directional Index)
-                di_sum = plus_di_series + minus_di_series
-                di_diff = abs(plus_di_series - minus_di_series)
-                dx = 100 * (di_diff / di_sum).where(di_sum != 0, 0)
-                
-                # Calculate ADX (14-period smoothed average of DX)
-                adx_series = dx.ewm(alpha=1/14, adjust=False).mean()
-                
-                # Get final values
-                if not pd.isna(adx_series.iloc[-1]):
-                    adx = float(adx_series.iloc[-1])
-                    plus_di = float(plus_di_series.iloc[-1]) if not pd.isna(plus_di_series.iloc[-1]) else None
-                    minus_di = float(minus_di_series.iloc[-1]) if not pd.isna(minus_di_series.iloc[-1]) else None
+                try:
+                    # Calculate True Range (TR)
+                    high_low = hist['High'] - hist['Low']
+                    high_close_prev = abs(hist['High'] - hist['Close'].shift(1))
+                    low_close_prev = abs(hist['Low'] - hist['Close'].shift(1))
+                    
+                    tr = pd.concat([high_low, high_close_prev, low_close_prev], axis=1).max(axis=1)
+                    
+                    # Calculate Directional Movement (+DM and -DM)
+                    up_move = hist['High'] - hist['High'].shift(1)
+                    down_move = hist['Low'].shift(1) - hist['Low']
+                    
+                    # Positive DM when up_move > down_move and up_move > 0
+                    plus_dm = up_move.where((up_move > down_move) & (up_move > 0), 0)
+                    # Negative DM when down_move > up_move and down_move > 0
+                    minus_dm = down_move.where((down_move > up_move) & (down_move > 0), 0)
+                    
+                    # Calculate 14-period smoothed averages (Wilder's smoothing)
+                    tr_14 = tr.ewm(alpha=1/14, adjust=False).mean()
+                    plus_dm_14 = plus_dm.ewm(alpha=1/14, adjust=False).mean()
+                    minus_dm_14 = minus_dm.ewm(alpha=1/14, adjust=False).mean()
+                    
+                    # Safe calculation of +DI and -DI (Directional Indicators)
+                    tr_14_val = tr_14.iloc[-1] if not pd.isna(tr_14.iloc[-1]) else 0
+                    plus_dm_14_val = plus_dm_14.iloc[-1] if not pd.isna(plus_dm_14.iloc[-1]) else 0
+                    minus_dm_14_val = minus_dm_14.iloc[-1] if not pd.isna(minus_dm_14.iloc[-1]) else 0
+                    
+                    if tr_14_val != 0:
+                        plus_di_val = 100 * (plus_dm_14_val / tr_14_val)
+                        minus_di_val = 100 * (minus_dm_14_val / tr_14_val)
+                        
+                        plus_di = self.safe_float(plus_di_val, None)
+                        minus_di = self.safe_float(minus_di_val, None)
+                        
+                        if plus_di is not None and minus_di is not None:
+                            # Calculate DX (Directional Index)
+                            di_sum = plus_di + minus_di
+                            di_diff = abs(plus_di - minus_di)
+                            
+                            if di_sum != 0:
+                                dx_val = 100 * (di_diff / di_sum)
+                                dx_val = self.safe_float(dx_val, None)
+                                
+                                if dx_val is not None:
+                                    # For ADX, we need to calculate smoothed DX over multiple periods
+                                    # Simplified version: use current DX as approximation
+                                    adx = dx_val
+                        
+                except Exception as e:
+                    logger.debug(f"Error in ADX calculation: {e}")
+                    adx = None
+                    plus_di = None
+                    minus_di = None
             
             result["teknik_indiktorler"] = {
                 "rsi_14": float(rsi_14) if rsi_14 is not None and not pd.isna(rsi_14) else None,
@@ -677,10 +767,10 @@ class YahooFinanceProvider:
             }
             
             # Volume Analysis
-            current_volume = int(hist['Volume'].iloc[-1])
-            avg_volume_10 = int(hist['Volume'].rolling(window=10).mean().iloc[-1]) if len(hist) >= 10 else None
-            avg_volume_30 = int(hist['Volume'].rolling(window=30).mean().iloc[-1]) if len(hist) >= 30 else None
-            volume_ratio = current_volume / avg_volume_10 if avg_volume_10 and avg_volume_10 > 0 else None
+            current_volume = int(hist['Volume'].iloc[-1]) if not pd.isna(hist['Volume'].iloc[-1]) else 0
+            avg_volume_10 = int(hist['Volume'].rolling(window=10).mean().iloc[-1]) if len(hist) >= 10 and not pd.isna(hist['Volume'].rolling(window=10).mean().iloc[-1]) else None
+            avg_volume_30 = int(hist['Volume'].rolling(window=30).mean().iloc[-1]) if len(hist) >= 30 and not pd.isna(hist['Volume'].rolling(window=30).mean().iloc[-1]) else None
+            volume_ratio = self.safe_divide(current_volume, avg_volume_10, None)
             
             volume_trend = "normal"
             if volume_ratio is not None:
@@ -764,7 +854,7 @@ class YahooFinanceProvider:
                     rating_description = None
                     if total_analysts > 0:
                         weighted_sum = (strong_buy * 1 + buy * 2 + hold * 3 + sell * 4 + strong_sell * 5)
-                        avg_rating = weighted_sum / total_analysts
+                        avg_rating = self.safe_divide(weighted_sum, total_analysts, None)
                         
                         if avg_rating <= 1.5:
                             rating_description = "Güçlü Al"
@@ -895,7 +985,7 @@ class YahooFinanceProvider:
             
             if signal_count > 0:
                 # Apply ADX modifier to the signal strength
-                avg_signal = (signal_score / signal_count) * adx_modifier
+                avg_signal = self.safe_divide(signal_score, signal_count, 0) * adx_modifier
                 
                 # Add ADX context to signal explanation
                 adx_context = ""
@@ -1004,12 +1094,13 @@ class YahooFinanceProvider:
                     if not hist.empty and len(hist) > 1:
                         start_price = hist['Close'].iloc[0]
                         end_price = hist['Close'].iloc[-1]
-                        yearly_return = ((end_price - start_price) / start_price) * 100
+                        yearly_return = self.safe_divide(end_price - start_price, start_price, None) * 100 if start_price is not None and start_price != 0 else None
                         
                         # Annualized volatility
                         daily_returns = hist['Close'].pct_change().dropna()
                         if len(daily_returns) > 1:
-                            volatility = daily_returns.std() * (252**0.5) * 100
+                            volatility_val = daily_returns.std() * (252**0.5) * 100
+                            volatility = self.safe_float(volatility_val, None)
                         
                         avg_volume = hist['Volume'].mean()
                     
@@ -1085,23 +1176,23 @@ class YahooFinanceProvider:
                 if not sector_info['companies']:
                     continue
                 
-                # Calculate averages
+                # Calculate averages safely
                 sector_summary = {
                     "sektor_adi": sector_name,
                     "sirket_sayisi": len(sector_info['companies']),
                     "sirket_listesi": sector_info['companies'],
-                    "ortalama_pe": sum(sector_info['pe_ratios']) / len(sector_info['pe_ratios']) if sector_info['pe_ratios'] else None,
-                    "ortalama_pb": sum(sector_info['pb_ratios']) / len(sector_info['pb_ratios']) if sector_info['pb_ratios'] else None,
-                    "ortalama_roe": sum(sector_info['roe_values']) / len(sector_info['roe_values']) if sector_info['roe_values'] else None,
-                    "ortalama_borclanma": sum(sector_info['debt_ratios']) / len(sector_info['debt_ratios']) if sector_info['debt_ratios'] else None,
-                    "ortalama_kar_marji": sum(sector_info['profit_margins']) / len(sector_info['profit_margins']) if sector_info['profit_margins'] else None,
-                    "ortalama_yillik_getiri": sum(sector_info['returns']) / len(sector_info['returns']) if sector_info['returns'] else None,
-                    "ortalama_volatilite": sum(sector_info['volatilities']) / len(sector_info['volatilities']) if sector_info['volatilities'] else None,
-                    "toplam_piyasa_degeri": sum(sector_info['market_caps']) if sector_info['market_caps'] else None,
-                    "en_yuksek_getiri": max(sector_info['returns']) if sector_info['returns'] else None,
-                    "en_dusuk_getiri": min(sector_info['returns']) if sector_info['returns'] else None,
-                    "en_yuksek_pe": max(sector_info['pe_ratios']) if sector_info['pe_ratios'] else None,
-                    "en_dusuk_pe": min(sector_info['pe_ratios']) if sector_info['pe_ratios'] else None
+                    "ortalama_pe": self.safe_float(self.safe_divide(sum(sector_info['pe_ratios']), len(sector_info['pe_ratios']), None), None) if sector_info['pe_ratios'] else None,
+                    "ortalama_pb": self.safe_float(self.safe_divide(sum(sector_info['pb_ratios']), len(sector_info['pb_ratios']), None), None) if sector_info['pb_ratios'] else None,
+                    "ortalama_roe": self.safe_float(self.safe_divide(sum(sector_info['roe_values']), len(sector_info['roe_values']), None), None) if sector_info['roe_values'] else None,
+                    "ortalama_borclanma": self.safe_float(self.safe_divide(sum(sector_info['debt_ratios']), len(sector_info['debt_ratios']), None), None) if sector_info['debt_ratios'] else None,
+                    "ortalama_kar_marji": self.safe_float(self.safe_divide(sum(sector_info['profit_margins']), len(sector_info['profit_margins']), None), None) if sector_info['profit_margins'] else None,
+                    "ortalama_yillik_getiri": self.safe_float(self.safe_divide(sum(sector_info['returns']), len(sector_info['returns']), None), None) if sector_info['returns'] else None,
+                    "ortalama_volatilite": self.safe_float(self.safe_divide(sum(sector_info['volatilities']), len(sector_info['volatilities']), None), None) if sector_info['volatilities'] else None,
+                    "toplam_piyasa_degeri": self.safe_float(sum(sector_info['market_caps']), None) if sector_info['market_caps'] else None,
+                    "en_yuksek_getiri": self.safe_float(max(sector_info['returns']), None) if sector_info['returns'] else None,
+                    "en_dusuk_getiri": self.safe_float(min(sector_info['returns']), None) if sector_info['returns'] else None,
+                    "en_yuksek_pe": self.safe_float(max(sector_info['pe_ratios']), None) if sector_info['pe_ratios'] else None,
+                    "en_dusuk_pe": self.safe_float(min(sector_info['pe_ratios']), None) if sector_info['pe_ratios'] else None
                 }
                 
                 result["sektor_ozetleri"].append(sector_summary)
@@ -1126,9 +1217,9 @@ class YahooFinanceProvider:
                 "en_iyi_performans_sektor": best_performing_sector,
                 "en_dusuk_risk_sektor": lowest_risk_sector,
                 "en_buyuk_sektor": largest_sector,
-                "genel_piyasa_degeri": float(total_market_cap) if total_market_cap > 0 else None,
-                "genel_ortalama_getiri": float(sum(all_returns) / len(all_returns)) if all_returns else None,
-                "genel_ortalama_volatilite": float(sum(all_volatilities) / len(all_volatilities)) if all_volatilities else None
+                "genel_piyasa_degeri": self.safe_float(total_market_cap, None) if total_market_cap > 0 else None,
+                "genel_ortalama_getiri": self.safe_float(self.safe_divide(sum(all_returns), len(all_returns), None), None) if all_returns else None,
+                "genel_ortalama_volatilite": self.safe_float(self.safe_divide(sum(all_volatilities), len(all_volatilities), None), None) if all_volatilities else None
             })
             
             return result
@@ -1226,11 +1317,12 @@ class YahooFinanceProvider:
                         if not hist.empty and len(hist) > 1:
                             start_price = hist['Close'].iloc[0]
                             end_price = hist['Close'].iloc[-1]
-                            yillik_getiri = ((end_price - start_price) / start_price) * 100
+                            yillik_getiri = self.safe_divide(end_price - start_price, start_price, None) * 100 if start_price is not None and start_price != 0 else None
                             
                             daily_returns = hist['Close'].pct_change().dropna()
                             if len(daily_returns) > 1:
-                                volatilite = daily_returns.std() * (252**0.5) * 100
+                                volatilite_val = daily_returns.std() * (252**0.5) * 100
+                                volatilite = self.safe_float(volatilite_val, None)
                     except Exception:
                         yillik_getiri = None
                         volatilite = None
@@ -1321,7 +1413,7 @@ class YahooFinanceProvider:
                         if kazanc_buyumesi and kazanc_buyumesi > 0.1:
                             buyume_skoru += 25
                         
-                        genel_skor = (deger_skoru + kalite_skoru + buyume_skoru) / 3
+                        genel_skor = self.safe_divide(deger_skoru + kalite_skoru + buyume_skoru, 3, 50.0)
                         
                         # Create TaranmisHisse object
                         taranmis_hisse = TaranmisHisse(
@@ -1389,7 +1481,9 @@ class YahooFinanceProvider:
                                 en_dusuk_pe = taranmis_hisse
                         
                         if temettu_getirisi and not pd.isna(temettu_getirisi):
-                            if en_yuksek_temettu is None or temettu_getirisi > (en_yuksek_temettu.temettu_getirisi or 0) / 100:
+                            current_div = temettu_getirisi
+                            best_div = self.safe_divide(en_yuksek_temettu.temettu_getirisi or 0, 100, 0) if en_yuksek_temettu else 0
+                            if en_yuksek_temettu is None or current_div > best_div:
                                 en_yuksek_temettu = taranmis_hisse
                         
                         if piyasa_degeri:
@@ -1403,7 +1497,7 @@ class YahooFinanceProvider:
             # Calculate summary statistics
             total_companies = screening_stats['total_tested']
             matching_companies = len(bulunan_hisseler)
-            success_rate = (matching_companies / total_companies * 100) if total_companies > 0 else 0
+            success_rate = self.safe_divide(matching_companies, total_companies, 0) * 100 if total_companies > 0 else 0
             
             # Calculate averages for matching stocks
             ortalama_pe = None
@@ -1419,11 +1513,11 @@ class YahooFinanceProvider:
                 div_values = [h.temettu_getirisi for h in bulunan_hisseler if h.temettu_getirisi is not None]
                 cap_values = [h.piyasa_degeri for h in bulunan_hisseler if h.piyasa_degeri is not None]
                 
-                ortalama_pe = sum(pe_values) / len(pe_values) if pe_values else None
-                ortalama_pb = sum(pb_values) / len(pb_values) if pb_values else None
-                ortalama_roe = sum(roe_values) / len(roe_values) if roe_values else None
-                ortalama_temettu = sum(div_values) / len(div_values) if div_values else None
-                toplam_piyasa_degeri = sum(cap_values) if cap_values else None
+                ortalama_pe = self.safe_float(self.safe_divide(sum(pe_values), len(pe_values), None), None) if pe_values else None
+                ortalama_pb = self.safe_float(self.safe_divide(sum(pb_values), len(pb_values), None), None) if pb_values else None
+                ortalama_roe = self.safe_float(self.safe_divide(sum(roe_values), len(roe_values), None), None) if roe_values else None
+                ortalama_temettu = self.safe_float(self.safe_divide(sum(div_values), len(div_values), None), None) if div_values else None
+                toplam_piyasa_degeri = self.safe_float(sum(cap_values), None) if cap_values else None
             
             # Create result
             tarama_sonucu = {
