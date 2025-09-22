@@ -102,8 +102,8 @@ DovizcomAssetLiteral = Literal["USD", "EUR", "GBP", "JPY", "CHF", "CAD", "AUD", 
 ResponseFormatLiteral = Literal["full", "compact"]
 
 @app.tool(
-    description="BIST STOCKS: Search companies by name to find ticker codes. STOCKS ONLY - use get_kripto_exchange_info for crypto.",
-    tags=["stocks", "search", "readonly"]
+    description="BIST STOCKS: Search companies by name to find ticker codes. First step before analysis. STOCKS ONLY - use get_kripto_exchange_info for crypto.",
+    tags=["stocks", "search", "readonly", "prerequisite"]
 )
 async def find_ticker_code(
     sirket_adi_veya_kodu: Annotated[str, Field(
@@ -128,7 +128,7 @@ async def find_ticker_code(
         return SirketAramaSonucu(arama_terimi=sirket_adi_veya_kodu, sonuclar=[], sonuc_sayisi=0, error_message=f"An unexpected error occurred: {str(e)}")
 
 @app.tool(
-    description="BIST STOCKS: Get company/index profile with financial metrics and sector info. STOCKS ONLY - use get_kripto_ticker for crypto.",
+    description="BIST STOCKS: Get company/index profile with financial metrics and sector info. For comprehensive analysis, also use get_teknik_analiz. STOCKS ONLY - use get_kripto_ticker for crypto.",
     tags=["stocks", "profile", "readonly", "external"]
 )
 async def get_sirket_profili(
@@ -479,7 +479,7 @@ async def get_kazanc_takvimi(
         logger.exception(f"Error in tool 'get_kazanc_takvimi' for ticker {ticker_kodu}.")
         return KazancTakvimSonucu(ticker_kodu=ticker_kodu, error_message=f"An unexpected error occurred: {str(e)}")
 
-@app.tool(description="Get BIST stock/index technical analysis: indicators, signals, trends. STOCKS ONLY - use get_kripto_ohlc for crypto.")
+@app.tool(description="Get BIST stock/index analysis with technical indicators, signals, trends. Use for any stock analysis request. STOCKS ONLY - use get_kripto_ohlc for crypto.")
 async def get_teknik_analiz(
     ticker_kodu: str = Field(..., description="BIST ticker: stock (GARAN, ASELS) or index (XU100, XBANK). No .IS suffix.")
 ) -> TeknikAnalizSonucu:
@@ -515,6 +515,50 @@ async def get_teknik_analiz(
             analiz_tarihi=datetime.now().replace(microsecond=0),
             error_message=f"An unexpected error occurred: {str(e)}"
         )
+
+@app.tool(
+    description="Quick stock analysis by name/ticker: Searches ticker and performs technical analysis in one step. Use this for 'analyze X stock' requests.",
+    tags=["stocks", "analysis", "combo"]
+)
+async def hisse_analiz_et(
+    hisse_adi_veya_kodu: str = Field(..., description="Company name or ticker (e.g., 'Tofaş', 'TOASO')")
+) -> Dict[str, Any]:
+    """
+    Combined tool for quick stock analysis.
+    Searches for ticker if name given, then performs technical analysis.
+    """
+    logger.info(f"Tool 'hisse_analiz_et' called with: '{hisse_adi_veya_kodu}'")
+    
+    # First, search for ticker
+    search_result = await borsa_client.search_companies_from_kap(hisse_adi_veya_kodu)
+    
+    if search_result.sonuc_sayisi == 0:
+        return {
+            "error": f"No company found for '{hisse_adi_veya_kodu}'",
+            "search_term": hisse_adi_veya_kodu
+        }
+    
+    # Get the first match ticker
+    ticker = search_result.sonuclar[0].ticker_kodu
+    company_name = search_result.sonuclar[0].sirket_adi
+    
+    # Perform technical analysis
+    try:
+        analysis_data = await borsa_client.get_teknik_analiz_yfinance(ticker)
+        
+        return {
+            "ticker_kodu": ticker,
+            "sirket_adi": company_name,
+            "arama_terimi": hisse_adi_veya_kodu,
+            "analiz": analysis_data
+        }
+    except Exception as e:
+        logger.exception(f"Error in technical analysis for {ticker}")
+        return {
+            "ticker_kodu": ticker,
+            "sirket_adi": company_name,
+            "error": f"Technical analysis failed: {str(e)}"
+        }
 
 @app.tool(description="Get BIST sector comparison: performance, valuations, rankings. STOCKS ONLY.")
 async def get_sektor_karsilastirmasi(
