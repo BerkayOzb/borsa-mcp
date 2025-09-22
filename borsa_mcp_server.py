@@ -517,15 +517,25 @@ async def get_teknik_analiz(
         )
 
 @app.tool(
-    description="Quick stock analysis by name/ticker: Searches ticker and performs technical analysis in one step. Use this for 'analyze X stock' requests.",
-    tags=["stocks", "analysis", "combo"]
+    description="Comprehensive stock analysis by name/ticker: Searches ticker and performs deep technical analysis with RSI, MACD, Bollinger Bands, Stochastic, ADX, moving averages, buy/sell signals. Use for any 'analyze stock' or 'X hissesi analiz' requests.",
+    tags=["stocks", "analysis", "combo", "technical"]
 )
 async def hisse_analiz_et(
-    hisse_adi_veya_kodu: str = Field(..., description="Company name or ticker (e.g., 'Tofaş', 'TOASO')")
+    hisse_adi_veya_kodu: str = Field(..., description="Company name or ticker (e.g., 'Tofaş', 'TOASO', 'Garanti', 'GARAN')")
 ) -> Dict[str, Any]:
     """
-    Combined tool for quick stock analysis.
-    Searches for ticker if name given, then performs technical analysis.
+    Comprehensive stock analysis combining search and technical analysis.
+    
+    Returns complete technical analysis with:
+    - RSI, MACD, Bollinger Bands, Stochastic, ADX indicators
+    - Moving averages (20, 50, 200-day)
+    - Buy/sell signals with detailed explanations
+    - Trend analysis and momentum indicators
+    - Support/resistance levels
+    - Volume analysis
+    
+    Use for trading signals, trend analysis, entry/exit point identification,
+    investment decisions, and comprehensive market assessment.
     """
     logger.info(f"Tool 'hisse_analiz_et' called with: '{hisse_adi_veya_kodu}'")
     
@@ -546,11 +556,17 @@ async def hisse_analiz_et(
     try:
         analysis_data = await borsa_client.get_teknik_analiz_yfinance(ticker)
         
+        # Generate comprehensive evaluation and recommendations
+        degerlendirme = generate_comprehensive_evaluation(analysis_data)
+        oneriler = generate_deep_recommendations(analysis_data)
+        
         return {
             "ticker_kodu": ticker,
             "sirket_adi": company_name,
             "arama_terimi": hisse_adi_veya_kodu,
-            "analiz": analysis_data
+            "analiz": analysis_data,
+            "kapsamli_degerlendirme": degerlendirme,
+            "detayli_oneriler": oneriler
         }
     except Exception as e:
         logger.exception(f"Error in technical analysis for {ticker}")
@@ -559,6 +575,169 @@ async def hisse_analiz_et(
             "sirket_adi": company_name,
             "error": f"Technical analysis failed: {str(e)}"
         }
+
+def generate_comprehensive_evaluation(analysis_data: Dict[str, Any]) -> str:
+    """Generate comprehensive evaluation based on technical indicators."""
+    evaluation = []
+    
+    # Get indicators
+    indicators = analysis_data.get("teknik_indiktorler", {})
+    signal = analysis_data.get("al_sat_sinyali", "")
+    price_analysis = analysis_data.get("fiyat_analizi", {})
+    trend = analysis_data.get("trend_analizi", {})
+    
+    # Overall signal evaluation
+    if signal == "guclu_al":
+        evaluation.append("📈 GÜÇLÜ ALIM SİNYALİ: Teknik göstergeler güçlü yükseliş potansiyeli işaret ediyor.")
+    elif signal == "al":
+        evaluation.append("📊 ALIM SİNYALİ: Göstergeler pozitif momentum oluşumuna işaret ediyor.")
+    elif signal == "guclu_sat":
+        evaluation.append("📉 GÜÇLÜ SATIŞ SİNYALİ: Teknik göstergeler aşağı yönlü güçlü baskı gösteriyor.")
+    elif signal == "sat":
+        evaluation.append("📉 SATIŞ SİNYALİ: Göstergeler negatif momentum oluşumuna işaret ediyor.")
+    else:
+        evaluation.append("⚖️ NÖTR DURUM: Piyasa belirsizlik içinde, yön arayışı devam ediyor.")
+    
+    # RSI evaluation
+    rsi = indicators.get("rsi")
+    if rsi:
+        if rsi < 30:
+            evaluation.append(f"• RSI ({rsi:.1f}): Aşırı satım bölgesinde - güçlü toparlanma potansiyeli")
+        elif rsi < 40:
+            evaluation.append(f"• RSI ({rsi:.1f}): Satım bölgesine yakın - alım fırsatı olabilir")
+        elif rsi > 70:
+            evaluation.append(f"• RSI ({rsi:.1f}): Aşırı alım bölgesinde - kar realizasyonu riski yüksek")
+        elif rsi > 60:
+            evaluation.append(f"• RSI ({rsi:.1f}): Alım bölgesine yakın - momentum güçlü")
+        else:
+            evaluation.append(f"• RSI ({rsi:.1f}): Nötr bölgede - trend takibi öneriliyor")
+    
+    # Stochastic evaluation
+    stoch_k = indicators.get("stochastic_k")
+    stoch_d = indicators.get("stochastic_d")
+    if stoch_k and stoch_d:
+        if stoch_k < 20 and stoch_d < 20:
+            evaluation.append(f"• Stochastic (%K={stoch_k:.1f}, %D={stoch_d:.1f}): Güçlü aşırı satım - yakın zamanda tepki beklenebilir")
+        elif stoch_k > 80 and stoch_d > 80:
+            evaluation.append(f"• Stochastic (%K={stoch_k:.1f}, %D={stoch_d:.1f}): Güçlü aşırı alım - düzeltme riski yüksek")
+        elif stoch_k > stoch_d:
+            evaluation.append(f"• Stochastic (%K={stoch_k:.1f}, %D={stoch_d:.1f}): Bullish crossover - yukarı momentum başlıyor")
+        else:
+            evaluation.append(f"• Stochastic (%K={stoch_k:.1f}, %D={stoch_d:.1f}): Bearish crossover - aşağı momentum")
+    
+    # ADX evaluation for trend strength
+    adx = indicators.get("adx")
+    if adx:
+        if adx < 25:
+            evaluation.append(f"• ADX ({adx:.1f}): Zayıf trend - yatay piyasa, range trading uygun")
+        elif adx < 50:
+            evaluation.append(f"• ADX ({adx:.1f}): Güçlü trend mevcut - trend takip stratejisi öneriliyor")
+        else:
+            evaluation.append(f"• ADX ({adx:.1f}): Çok güçlü trend - momentum stratejileri uygun")
+    
+    # Moving averages evaluation
+    ma_analysis = trend.get("hareketli_ortalama_analizi", {})
+    if ma_analysis:
+        golden_cross = ma_analysis.get("golden_cross")
+        death_cross = ma_analysis.get("death_cross")
+        if golden_cross:
+            evaluation.append("• Golden Cross sinyali: Uzun vadeli yükseliş trendi başlangıcı")
+        elif death_cross:
+            evaluation.append("• Death Cross sinyali: Uzun vadeli düşüş trendi uyarısı")
+    
+    # Volume analysis
+    volume = analysis_data.get("hacim_analizi", {})
+    if volume:
+        vol_trend = volume.get("hacim_trendi")
+        if vol_trend == "artan":
+            evaluation.append("• Hacim artışı: Mevcut hareketin güvenilirliği yüksek")
+        elif vol_trend == "azalan":
+            evaluation.append("• Hacim azalışı: Mevcut hareket zayıflıyor olabilir")
+    
+    return "\n".join(evaluation)
+
+def generate_deep_recommendations(analysis_data: Dict[str, Any]) -> Dict[str, List[str]]:
+    """Generate deep, actionable recommendations for different investor types."""
+    
+    indicators = analysis_data.get("teknik_indiktorler", {})
+    signal = analysis_data.get("al_sat_sinyali", "")
+    
+    recommendations = {
+        "kisa_vadeli_yatirimci": [],
+        "orta_vadeli_yatirimci": [],
+        "uzun_vadeli_yatirimci": [],
+        "risk_yonetimi": [],
+        "giris_stratejisi": [],
+        "cikis_stratejisi": []
+    }
+    
+    # Short-term investor recommendations
+    if signal in ["guclu_al", "al"]:
+        recommendations["kisa_vadeli_yatirimci"].append("✅ Kademeli alım yapılabilir")
+        recommendations["kisa_vadeli_yatirimci"].append("📊 İlk hedef: %3-5 kar realizasyonu")
+        recommendations["kisa_vadeli_yatirimci"].append("⏰ Pozisyon süresi: 1-5 gün")
+    elif signal in ["guclu_sat", "sat"]:
+        recommendations["kisa_vadeli_yatirimci"].append("❌ Yeni pozisyon açmayın")
+        recommendations["kisa_vadeli_yatirimci"].append("💰 Mevcut pozisyonlarda kar realizasyonu")
+        recommendations["kisa_vadeli_yatirimci"].append("⏳ Düzeltme sonrası alım fırsatı bekleyin")
+    else:
+        recommendations["kisa_vadeli_yatirimci"].append("⚖️ Beklemede kalın")
+        recommendations["kisa_vadeli_yatirimci"].append("👀 Hacim artışı ve yön oluşumunu takip edin")
+    
+    # Medium-term investor recommendations
+    rsi = indicators.get("rsi", 50)
+    adx = indicators.get("adx", 25)
+    
+    if rsi < 40 and adx > 25:
+        recommendations["orta_vadeli_yatirimci"].append("🎯 Güçlü alım fırsatı")
+        recommendations["orta_vadeli_yatirimci"].append("📈 Hedef: %10-15 getiri")
+        recommendations["orta_vadeli_yatirimci"].append("📅 Tavsiye edilen süre: 2-4 hafta")
+    elif rsi > 70:
+        recommendations["orta_vadeli_yatirimci"].append("⚠️ Kademeli kar realizasyonu")
+        recommendations["orta_vadeli_yatirimci"].append("🔄 Pozisyon azaltma: %30-50")
+    else:
+        recommendations["orta_vadeli_yatirimci"].append("🔍 Trend doğrulama bekleyin")
+        recommendations["orta_vadeli_yatirimci"].append("📊 Destek seviyelerinde alım planlayın")
+    
+    # Long-term investor recommendations
+    ma_trend = analysis_data.get("trend_analizi", {}).get("genel_trend")
+    if ma_trend == "yukselis":
+        recommendations["uzun_vadeli_yatirimci"].append("📈 Uzun vadeli trend pozitif")
+        recommendations["uzun_vadeli_yatirimci"].append("💎 Birikimli alım stratejisi uygulayın")
+        recommendations["uzun_vadeli_yatirimci"].append("📆 Minimum 6 ay pozisyon süresi planlayın")
+    elif ma_trend == "dusulis":
+        recommendations["uzun_vadeli_yatirimci"].append("📉 Uzun vadeli trend negatif")
+        recommendations["uzun_vadeli_yatirimci"].append("⏸️ Yeni alımları erteleyin")
+        recommendations["uzun_vadeli_yatirimci"].append("🛡️ Mevcut pozisyonları hedge edin")
+    
+    # Risk management
+    recommendations["risk_yonetimi"].append("🛑 Stop-loss: Son 5 günün en düşüğünün %2 altı")
+    recommendations["risk_yonetimi"].append("💼 Pozisyon büyüklüğü: Portföyün maksimum %5-10'u")
+    recommendations["risk_yonetimi"].append("📊 Risk/Ödül oranı: Minimum 1:2 hedefleyin")
+    recommendations["risk_yonetimi"].append("🔄 Trailing stop: Kar %5'i geçince aktifleştirin")
+    
+    # Entry strategy
+    stoch_k = indicators.get("stochastic_k", 50)
+    if stoch_k < 30:
+        recommendations["giris_stratejisi"].append("✅ Agresif giriş yapılabilir")
+        recommendations["giris_stratejisi"].append("🎯 İlk giriş: Pozisyonun %40'ı")
+        recommendations["giris_stratejisi"].append("📉 Düşüşlerde: %30'luk dilimlerle ekleme")
+    else:
+        recommendations["giris_stratejisi"].append("⏳ Geri çekilme bekleyin")
+        recommendations["giris_stratejisi"].append("📊 Destek seviyelerini test etmesini bekleyin")
+        recommendations["giris_stratejisi"].append("🎯 Fibonacci %38.2 veya %50 geri çekilmelerinde giriş")
+    
+    # Exit strategy
+    if signal in ["guclu_sat", "sat"]:
+        recommendations["cikis_stratejisi"].append("🚪 Hızlı çıkış öneriliyor")
+        recommendations["cikis_stratejisi"].append("💰 İlk dirençte %50 satış")
+        recommendations["cikis_stratejisi"].append("📈 Kalan %50 için trailing stop kullanın")
+    else:
+        recommendations["cikis_stratejisi"].append("🎯 Hedef fiyat: Direnç seviyelerinde kademeli satış")
+        recommendations["cikis_stratejisi"].append("📊 İlk hedefte %30, ikinci hedefte %40 satış")
+        recommendations["cikis_stratejisi"].append("💎 %30'u uzun vade için tutun")
+    
+    return recommendations
 
 @app.tool(description="Get BIST sector comparison: performance, valuations, rankings. STOCKS ONLY.")
 async def get_sektor_karsilastirmasi(
