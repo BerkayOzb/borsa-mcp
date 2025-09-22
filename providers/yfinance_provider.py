@@ -765,6 +765,22 @@ class YahooFinanceProvider:
                     signal_score -= 1  # Bearish
                 signal_count += 1
             
+            # Stochastic Oscillator signal
+            if stochastic_k is not None and stochastic_d is not None:
+                # Overbought/Oversold levels
+                if stochastic_k < 20 and stochastic_d < 20:
+                    signal_score += 2  # Oversold - strong buy signal
+                elif stochastic_k > 80 and stochastic_d > 80:
+                    signal_score -= 2  # Overbought - strong sell signal
+                
+                # %K and %D crossover signals
+                if stochastic_k > stochastic_d:
+                    signal_score += 1  # Bullish when %K crosses above %D
+                else:
+                    signal_score -= 1  # Bearish when %K crosses below %D
+                
+                signal_count += 1
+            
             # Moving average trends
             if short_trend == "yukselis":
                 signal_score += 1
