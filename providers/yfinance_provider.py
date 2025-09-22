@@ -614,6 +614,53 @@ class YahooFinanceProvider:
                 stochastic_k = k_percent.iloc[-1] if not pd.isna(k_percent.iloc[-1]) else None
                 stochastic_d = k_percent.rolling(window=3).mean().iloc[-1] if len(k_percent) >= 3 else None
             
+            # ADX (Average Directional Index) calculation
+            adx = None
+            plus_di = None
+            minus_di = None
+            if len(hist) >= 28:  # Need at least 28 periods for stable ADX (14 for initial calculation + 14 for smoothing)
+                # Calculate True Range (TR)
+                high_low = hist['High'] - hist['Low']
+                high_close_prev = abs(hist['High'] - hist['Close'].shift(1))
+                low_close_prev = abs(hist['Low'] - hist['Close'].shift(1))
+                
+                tr = pd.concat([high_low, high_close_prev, low_close_prev], axis=1).max(axis=1)
+                
+                # Calculate Directional Movement (+DM and -DM)
+                up_move = hist['High'] - hist['High'].shift(1)
+                down_move = hist['Low'].shift(1) - hist['Low']
+                
+                plus_dm = pd.Series(index=hist.index, dtype=float)
+                minus_dm = pd.Series(index=hist.index, dtype=float)
+                
+                # Positive DM when up_move > down_move and up_move > 0
+                plus_dm = up_move.where((up_move > down_move) & (up_move > 0), 0)
+                # Negative DM when down_move > up_move and down_move > 0
+                minus_dm = down_move.where((down_move > up_move) & (down_move > 0), 0)
+                
+                # Calculate 14-period smoothed averages (Wilder's smoothing)
+                tr_14 = tr.ewm(alpha=1/14, adjust=False).mean()
+                plus_dm_14 = plus_dm.ewm(alpha=1/14, adjust=False).mean()
+                minus_dm_14 = minus_dm.ewm(alpha=1/14, adjust=False).mean()
+                
+                # Calculate +DI and -DI (Directional Indicators)
+                plus_di_series = 100 * (plus_dm_14 / tr_14)
+                minus_di_series = 100 * (minus_dm_14 / tr_14)
+                
+                # Calculate DX (Directional Index)
+                di_sum = plus_di_series + minus_di_series
+                di_diff = abs(plus_di_series - minus_di_series)
+                dx = 100 * (di_diff / di_sum).where(di_sum != 0, 0)
+                
+                # Calculate ADX (14-period smoothed average of DX)
+                adx_series = dx.ewm(alpha=1/14, adjust=False).mean()
+                
+                # Get final values
+                if not pd.isna(adx_series.iloc[-1]):
+                    adx = float(adx_series.iloc[-1])
+                    plus_di = float(plus_di_series.iloc[-1]) if not pd.isna(plus_di_series.iloc[-1]) else None
+                    minus_di = float(minus_di_series.iloc[-1]) if not pd.isna(minus_di_series.iloc[-1]) else None
+            
             result["teknik_indiktorler"] = {
                 "rsi_14": float(rsi_14) if rsi_14 is not None and not pd.isna(rsi_14) else None,
                 "macd": macd,
@@ -623,7 +670,10 @@ class YahooFinanceProvider:
                 "bollinger_middle": float(bollinger_middle) if bollinger_middle is not None and not pd.isna(bollinger_middle) else None,
                 "bollinger_lower": float(bollinger_lower) if bollinger_lower is not None and not pd.isna(bollinger_lower) else None,
                 "stochastic_k": float(stochastic_k) if stochastic_k is not None and not pd.isna(stochastic_k) else None,
-                "stochastic_d": float(stochastic_d) if stochastic_d is not None and not pd.isna(stochastic_d) else None
+                "stochastic_d": float(stochastic_d) if stochastic_d is not None and not pd.isna(stochastic_d) else None,
+                "adx": float(adx) if adx is not None and not pd.isna(adx) else None,
+                "plus_di": float(plus_di) if plus_di is not None and not pd.isna(plus_di) else None,
+                "minus_di": float(minus_di) if minus_di is not None and not pd.isna(minus_di) else None
             }
             
             # Volume Analysis
@@ -781,6 +831,33 @@ class YahooFinanceProvider:
                 
                 signal_count += 1
             
+            # ADX (Average Directional Index) trend strength modifier
+            adx_modifier = 1.0  # Default modifier
+            if adx is not None and plus_di is not None and minus_di is not None:
+                # Determine trend direction from +DI and -DI
+                trend_direction = 0
+                if plus_di > minus_di:
+                    trend_direction = 1  # Upward trend
+                elif minus_di > plus_di:
+                    trend_direction = -1  # Downward trend
+                
+                # Apply ADX-based confidence modifiers
+                if adx < 25:
+                    # Weak trend - reduce signal confidence
+                    adx_modifier = 0.5
+                elif adx > 50:
+                    # Very strong trend - double the signal weight for trend direction
+                    adx_modifier = 2.0
+                    if trend_direction != 0:
+                        signal_score += trend_direction * 2  # Strong trend bonus
+                        signal_count += 1
+                elif adx > 25:
+                    # Strong trend - increase signal confidence
+                    adx_modifier = 1.5
+                    if trend_direction != 0:
+                        signal_score += trend_direction  # Trend direction signal
+                        signal_count += 1
+            
             # Moving average trends
             if short_trend == "yukselis":
                 signal_score += 1
@@ -812,28 +889,39 @@ class YahooFinanceProvider:
                     signal_score -= 1
                 signal_count += 1
             
-            # Calculate final signal
+            # Calculate final signal with ADX modifier
             overall_signal = "notr"
             signal_explanation = "Yeterli veri yok"
             
             if signal_count > 0:
-                avg_signal = signal_score / signal_count
+                # Apply ADX modifier to the signal strength
+                avg_signal = (signal_score / signal_count) * adx_modifier
+                
+                # Add ADX context to signal explanation
+                adx_context = ""
+                if adx is not None:
+                    if adx < 25:
+                        adx_context = " (Zayıf trend - ADX<25)"
+                    elif adx > 50:
+                        adx_context = " (Çok güçlü trend - ADX>50)"
+                    elif adx > 25:
+                        adx_context = " (Güçlü trend - ADX>25)"
                 
                 if avg_signal >= 1.5:
                     overall_signal = "guclu_al"
-                    signal_explanation = "Güçlü al sinyali - çoklu gösterge pozitif"
+                    signal_explanation = f"Güçlü al sinyali - çoklu gösterge pozitif{adx_context}"
                 elif avg_signal >= 0.5:
                     overall_signal = "al"
-                    signal_explanation = "Al sinyali - göstergeler pozitif"
+                    signal_explanation = f"Al sinyali - göstergeler pozitif{adx_context}"
                 elif avg_signal <= -1.5:
                     overall_signal = "guclu_sat"
-                    signal_explanation = "Güçlü sat sinyali - çoklu gösterge negatif"
+                    signal_explanation = f"Güçlü sat sinyali - çoklu gösterge negatif{adx_context}"
                 elif avg_signal <= -0.5:
                     overall_signal = "sat"
-                    signal_explanation = "Sat sinyali - göstergeler negatif"
+                    signal_explanation = f"Sat sinyali - göstergeler negatif{adx_context}"
                 else:
                     overall_signal = "notr"
-                    signal_explanation = "Nötr - karışık sinyaller"
+                    signal_explanation = f"Nötr - karışık sinyaller{adx_context}"
             
             result["al_sat_sinyali"] = overall_signal
             result["sinyal_aciklamasi"] = signal_explanation

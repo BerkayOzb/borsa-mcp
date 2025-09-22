@@ -235,6 +235,9 @@ class TeknikIndiktorler(BaseModel):
     bollinger_lower: Optional[float] = Field(None, description="Lower Bollinger Band.")
     stochastic_k: Optional[float] = Field(None, description="Stochastic %K.")
     stochastic_d: Optional[float] = Field(None, description="Stochastic %D.")
+    adx: Optional[float] = Field(None, description="Average Directional Index (0-100) - trend strength indicator.")
+    plus_di: Optional[float] = Field(None, description="+DI Directional Indicator - upward price movement strength.")
+    minus_di: Optional[float] = Field(None, description="-DI Directional Indicator - downward price movement strength.")
 
 class HacimAnalizi(BaseModel):
     """Volume analysis metrics."""
