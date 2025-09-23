@@ -224,6 +224,19 @@ class HareketliOrtalama(BaseModel):
     ema_12: Optional[float] = Field(None, description="12-day Exponential Moving Average.")
     ema_26: Optional[float] = Field(None, description="26-day Exponential Moving Average.")
 
+class FibonacciRetracement(BaseModel):
+    """Fibonacci Retracement levels and analysis."""
+    high_point: Optional[float] = Field(None, description="Highest price in analysis period.")
+    low_point: Optional[float] = Field(None, description="Lowest price in analysis period.")
+    price_range: Optional[float] = Field(None, description="Price range (high - low).")
+    levels: Optional[Dict[str, float]] = Field(None, description="Fibonacci levels (0%, 23.6%, 38.2%, 50%, 61.8%, 78.6%, 100%).")
+    current_level: Optional[str] = Field(None, description="Fibonacci level nearest to current price.")
+    current_level_percentage: Optional[float] = Field(None, description="Percentage retracement of current price.")
+    next_support: Optional[float] = Field(None, description="Next Fibonacci support level below current price.")
+    next_resistance: Optional[float] = Field(None, description="Next Fibonacci resistance level above current price.")
+    trend_direction: Optional[str] = Field(None, description="Trend direction: 'uptrend' or 'downtrend'.")
+    analysis_period_days: Optional[int] = Field(None, description="Number of days used for high/low calculation.")
+
 class TeknikIndiktorler(BaseModel):
     """Technical indicators calculated from price data."""
     rsi_14: Optional[float] = Field(None, description="14-day Relative Strength Index.")
@@ -238,6 +251,7 @@ class TeknikIndiktorler(BaseModel):
     adx: Optional[float] = Field(None, description="Average Directional Index (0-100) - trend strength indicator.")
     plus_di: Optional[float] = Field(None, description="+DI Directional Indicator - upward price movement strength.")
     minus_di: Optional[float] = Field(None, description="-DI Directional Indicator - downward price movement strength.")
+    fibonacci_retracement: Optional[FibonacciRetracement] = Field(None, description="Fibonacci Retracement levels and analysis.")
 
 class HacimAnalizi(BaseModel):
     """Volume analysis metrics."""

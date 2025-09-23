@@ -751,6 +751,110 @@ class YahooFinanceProvider:
                     plus_di = None
                     minus_di = None
             
+            # Fibonacci Retracement calculation
+            fibonacci_retracement = None
+            if len(hist) >= 52:  # Need at least 52 periods for meaningful analysis
+                try:
+                    # Use last 52 weeks (252 trading days) or available data
+                    analysis_period = min(252, len(hist))
+                    period_data = hist.tail(analysis_period)
+                    
+                    # Find highest high and lowest low in the period
+                    high_point = float(period_data['High'].max())
+                    low_point = float(period_data['Low'].min())
+                    current_price = float(hist['Close'].iloc[-1])
+                    
+                    if not pd.isna(high_point) and not pd.isna(low_point) and not pd.isna(current_price):
+                        price_range = high_point - low_point
+                        
+                        if price_range > 0:  # Ensure we have a valid range
+                            # Standard Fibonacci retracement levels
+                            fib_ratios = {
+                                "0%": 0.0,
+                                "23.6%": 0.236,
+                                "38.2%": 0.382,
+                                "50%": 0.500,
+                                "61.8%": 0.618,
+                                "78.6%": 0.786,
+                                "100%": 1.0
+                            }
+                            
+                            # Determine trend direction based on recent price movement
+                            # Compare current price to midpoint and recent price action
+                            midpoint = (high_point + low_point) / 2
+                            
+                            # Look at last 20 periods for trend determination
+                            recent_data = hist.tail(20)
+                            recent_trend_slope = 0
+                            if len(recent_data) >= 2:
+                                recent_high = recent_data['High'].max()
+                                recent_low = recent_data['Low'].min()
+                                if recent_high > midpoint and current_price > midpoint:
+                                    recent_trend_slope = 1  # Uptrend
+                                elif recent_low < midpoint and current_price < midpoint:
+                                    recent_trend_slope = -1  # Downtrend
+                            
+                            # Calculate Fibonacci levels
+                            levels = {}
+                            if recent_trend_slope >= 0:  # Uptrend - retracement from high
+                                trend_direction = "uptrend"
+                                for label, ratio in fib_ratios.items():
+                                    levels[label] = high_point - (price_range * ratio)
+                            else:  # Downtrend - retracement from low
+                                trend_direction = "downtrend"
+                                for label, ratio in fib_ratios.items():
+                                    levels[label] = low_point + (price_range * ratio)
+                            
+                            # Find current level and percentage retracement
+                            current_level = None
+                            current_level_percentage = None
+                            next_support = None
+                            next_resistance = None
+                            
+                            # Calculate actual retracement percentage
+                            if trend_direction == "uptrend":
+                                current_retracement = self.safe_divide(high_point - current_price, price_range, 0)
+                            else:
+                                current_retracement = self.safe_divide(current_price - low_point, price_range, 0)
+                            
+                            current_level_percentage = current_retracement * 100 if current_retracement is not None else None
+                            
+                            # Find nearest Fibonacci level
+                            min_distance = float('inf')
+                            for label, level in levels.items():
+                                distance = abs(current_price - level)
+                                if distance < min_distance:
+                                    min_distance = distance
+                                    current_level = label
+                            
+                            # Find next support and resistance levels
+                            price_levels = [(label, level) for label, level in levels.items()]
+                            price_levels.sort(key=lambda x: x[1])  # Sort by price level
+                            
+                            for i, (label, level) in enumerate(price_levels):
+                                if level < current_price:
+                                    next_support = level
+                                elif level > current_price and next_resistance is None:
+                                    next_resistance = level
+                                    break
+                            
+                            fibonacci_retracement = {
+                                "high_point": high_point,
+                                "low_point": low_point,
+                                "price_range": price_range,
+                                "levels": levels,
+                                "current_level": current_level,
+                                "current_level_percentage": float(current_level_percentage) if current_level_percentage is not None else None,
+                                "next_support": float(next_support) if next_support is not None else None,
+                                "next_resistance": float(next_resistance) if next_resistance is not None else None,
+                                "trend_direction": trend_direction,
+                                "analysis_period_days": analysis_period
+                            }
+                        
+                except Exception as e:
+                    logger.debug(f"Error in Fibonacci retracement calculation: {e}")
+                    fibonacci_retracement = None
+            
             result["teknik_indiktorler"] = {
                 "rsi_14": float(rsi_14) if rsi_14 is not None and not pd.isna(rsi_14) else None,
                 "macd": macd,
@@ -763,7 +867,8 @@ class YahooFinanceProvider:
                 "stochastic_d": float(stochastic_d) if stochastic_d is not None and not pd.isna(stochastic_d) else None,
                 "adx": float(adx) if adx is not None and not pd.isna(adx) else None,
                 "plus_di": float(plus_di) if plus_di is not None and not pd.isna(plus_di) else None,
-                "minus_di": float(minus_di) if minus_di is not None and not pd.isna(minus_di) else None
+                "minus_di": float(minus_di) if minus_di is not None and not pd.isna(minus_di) else None,
+                "fibonacci_retracement": fibonacci_retracement
             }
             
             # Volume Analysis
@@ -979,6 +1084,72 @@ class YahooFinanceProvider:
                     signal_score -= 1
                 signal_count += 1
             
+            # Fibonacci Retracement signals
+            if fibonacci_retracement is not None:
+                current_price = hist['Close'].iloc[-1]
+                
+                # Get Fibonacci levels and current position
+                fib_levels = fibonacci_retracement.get("levels", {})
+                trend_direction = fibonacci_retracement.get("trend_direction")
+                
+                if fib_levels and not pd.isna(current_price):
+                    # Key Fibonacci levels for support/resistance
+                    level_382 = fib_levels.get("38.2%")
+                    level_500 = fib_levels.get("50%")
+                    level_618 = fib_levels.get("61.8%")
+                    
+                    if level_382 is not None and level_500 is not None and level_618 is not None:
+                        # Calculate how close the price is to key levels (within 1% tolerance)
+                        tolerance = 0.01  # 1% tolerance
+                        
+                        # Strong support at 38.2% and 61.8% levels
+                        if trend_direction == "uptrend":  # Retracement from high
+                            # In uptrend, lower levels are support
+                            if abs(current_price - level_618) / current_price <= tolerance:
+                                signal_score += 2  # Strong buy signal at 61.8% support
+                                signal_count += 1
+                            elif abs(current_price - level_382) / current_price <= tolerance:
+                                signal_score += 1.5  # Buy signal at 38.2% support
+                                signal_count += 1
+                            elif abs(current_price - level_500) / current_price <= tolerance:
+                                signal_score += 1  # Moderate support at 50%
+                                signal_count += 1
+                            # Breaking below 61.8% suggests trend weakness
+                            elif current_price < level_618 * 0.98:  # 2% below 61.8%
+                                signal_score -= 1
+                                signal_count += 1
+                        
+                        elif trend_direction == "downtrend":  # Retracement from low
+                            # In downtrend, higher levels are resistance
+                            if abs(current_price - level_618) / current_price <= tolerance:
+                                signal_score -= 2  # Strong sell signal at 61.8% resistance
+                                signal_count += 1
+                            elif abs(current_price - level_382) / current_price <= tolerance:
+                                signal_score -= 1.5  # Sell signal at 38.2% resistance
+                                signal_count += 1
+                            elif abs(current_price - level_500) / current_price <= tolerance:
+                                signal_score -= 1  # Moderate resistance at 50%
+                                signal_count += 1
+                            # Breaking above 61.8% suggests trend reversal
+                            elif current_price > level_618 * 1.02:  # 2% above 61.8%
+                                signal_score += 1
+                                signal_count += 1
+                        
+                        # Trend continuation signals
+                        if trend_direction == "uptrend":
+                            # Breaking above recent high suggests trend continuation
+                            recent_high = fibonacci_retracement.get("high_point")
+                            if recent_high and current_price > recent_high * 1.01:  # 1% above high
+                                signal_score += 1.5  # Strong continuation signal
+                                signal_count += 1
+                        
+                        elif trend_direction == "downtrend":
+                            # Breaking below recent low suggests trend continuation
+                            recent_low = fibonacci_retracement.get("low_point")
+                            if recent_low and current_price < recent_low * 0.99:  # 1% below low
+                                signal_score -= 1.5  # Strong continuation signal
+                                signal_count += 1
+            
             # Calculate final signal with ADX modifier
             overall_signal = "notr"
             signal_explanation = "Yeterli veri yok"
@@ -997,21 +1168,46 @@ class YahooFinanceProvider:
                     elif adx > 25:
                         adx_context = " (Güçlü trend - ADX>25)"
                 
+                # Add Fibonacci context to signal explanation
+                fib_context = ""
+                if fibonacci_retracement is not None:
+                    current_level = fibonacci_retracement.get("current_level")
+                    trend_direction = fibonacci_retracement.get("trend_direction")
+                    next_support = fibonacci_retracement.get("next_support")
+                    next_resistance = fibonacci_retracement.get("next_resistance")
+                    
+                    if current_level and trend_direction:
+                        if current_level in ["38.2%", "61.8%"]:
+                            if trend_direction == "uptrend":
+                                fib_context = f" (Fib {current_level} destek seviyesinde)"
+                            else:
+                                fib_context = f" (Fib {current_level} direnç seviyesinde)"
+                        elif current_level == "50%":
+                            fib_context = f" (Fib %50 psikolojik seviyede)"
+                        else:
+                            fib_context = f" (Fib {current_level} seviyesinde)"
+                        
+                        # Add next key level information
+                        if trend_direction == "uptrend" and next_support:
+                            fib_context += f", sonraki destek: {next_support:.2f}"
+                        elif trend_direction == "downtrend" and next_resistance:
+                            fib_context += f", sonraki direnç: {next_resistance:.2f}"
+                
                 if avg_signal >= 1.5:
                     overall_signal = "guclu_al"
-                    signal_explanation = f"Güçlü al sinyali - çoklu gösterge pozitif{adx_context}"
+                    signal_explanation = f"Güçlü al sinyali - çoklu gösterge pozitif{adx_context}{fib_context}"
                 elif avg_signal >= 0.5:
                     overall_signal = "al"
-                    signal_explanation = f"Al sinyali - göstergeler pozitif{adx_context}"
+                    signal_explanation = f"Al sinyali - göstergeler pozitif{adx_context}{fib_context}"
                 elif avg_signal <= -1.5:
                     overall_signal = "guclu_sat"
-                    signal_explanation = f"Güçlü sat sinyali - çoklu gösterge negatif{adx_context}"
+                    signal_explanation = f"Güçlü sat sinyali - çoklu gösterge negatif{adx_context}{fib_context}"
                 elif avg_signal <= -0.5:
                     overall_signal = "sat"
-                    signal_explanation = f"Sat sinyali - göstergeler negatif{adx_context}"
+                    signal_explanation = f"Sat sinyali - göstergeler negatif{adx_context}{fib_context}"
                 else:
                     overall_signal = "notr"
-                    signal_explanation = f"Nötr - karışık sinyaller{adx_context}"
+                    signal_explanation = f"Nötr - karışık sinyaller{adx_context}{fib_context}"
             
             result["al_sat_sinyali"] = overall_signal
             result["sinyal_aciklamasi"] = signal_explanation
