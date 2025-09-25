@@ -237,6 +237,27 @@ class FibonacciRetracement(BaseModel):
     trend_direction: Optional[str] = Field(None, description="Trend direction: 'uptrend' or 'downtrend'.")
     analysis_period_days: Optional[int] = Field(None, description="Number of days used for high/low calculation.")
 
+class SupportResistanceLevel(BaseModel):
+    """Represents a single support or resistance level."""
+    price: float = Field(description="Price level.")
+    strength: float = Field(description="Strength score (0-100) based on tests, volume, and recency.")
+    volume: Optional[float] = Field(None, description="Average volume at this level.")
+    tests: int = Field(description="Number of times this level was tested.")
+    last_test_date: Optional[str] = Field(None, description="Date of last test (ISO format).")
+    level_type: str = Field(description="Type: 'support' or 'resistance'.")
+
+class SupportResistance(BaseModel):
+    """Support and Resistance levels analysis."""
+    support_levels: List[SupportResistanceLevel] = Field(default_factory=list, description="Support levels below current price.")
+    resistance_levels: List[SupportResistanceLevel] = Field(default_factory=list, description="Resistance levels above current price.")
+    nearest_support: Optional[SupportResistanceLevel] = Field(None, description="Closest support level below current price.")
+    nearest_resistance: Optional[SupportResistanceLevel] = Field(None, description="Closest resistance level above current price.")
+    price_near_support: bool = Field(False, description="True if price is within 1% of a support level.")
+    price_near_resistance: bool = Field(False, description="True if price is within 1% of a resistance level.")
+    strongest_support: Optional[SupportResistanceLevel] = Field(None, description="Strongest support level.")
+    strongest_resistance: Optional[SupportResistanceLevel] = Field(None, description="Strongest resistance level.")
+    analysis_period_days: int = Field(description="Number of days analyzed for S/R levels.")
+
 class TeknikIndiktorler(BaseModel):
     """Technical indicators calculated from price data."""
     rsi_14: Optional[float] = Field(None, description="14-day Relative Strength Index.")
@@ -252,6 +273,7 @@ class TeknikIndiktorler(BaseModel):
     plus_di: Optional[float] = Field(None, description="+DI Directional Indicator - upward price movement strength.")
     minus_di: Optional[float] = Field(None, description="-DI Directional Indicator - downward price movement strength.")
     fibonacci_retracement: Optional[FibonacciRetracement] = Field(None, description="Fibonacci Retracement levels and analysis.")
+    support_resistance: Optional[SupportResistance] = Field(None, description="Support and Resistance levels analysis.")
 
 class HacimAnalizi(BaseModel):
     """Volume analysis metrics."""

@@ -855,6 +855,185 @@ class YahooFinanceProvider:
                     logger.debug(f"Error in Fibonacci retracement calculation: {e}")
                     fibonacci_retracement = None
             
+            # Support and Resistance Level Detection
+            support_resistance = None
+            if len(hist) >= 40:  # Need sufficient data
+                try:
+                    analysis_period = min(100, len(hist))  # Use up to 100 days
+                    sr_data = hist.tail(analysis_period).copy()
+                    
+                    # Rolling window for finding local peaks and troughs
+                    window = 20  # 20-period window
+                    tolerance = 0.015  # 1.5% tolerance for clustering levels
+                    
+                    # Find local maxima (resistance) and minima (support)
+                    highs = sr_data['High'].rolling(window=window, center=True).max()
+                    lows = sr_data['Low'].rolling(window=window, center=True).min()
+                    
+                    potential_resistance = []
+                    potential_support = []
+                    
+                    # Identify resistance levels (local peaks)
+                    for i in range(window, len(sr_data) - window):
+                        if (sr_data['High'].iloc[i] == highs.iloc[i] and 
+                            sr_data['High'].iloc[i] > sr_data['High'].iloc[i-1] and
+                            sr_data['High'].iloc[i] > sr_data['High'].iloc[i+1]):
+                            potential_resistance.append({
+                                'price': float(sr_data['High'].iloc[i]),
+                                'date': sr_data.index[i],
+                                'volume': float(sr_data['Volume'].iloc[i])
+                            })
+                    
+                    # Identify support levels (local troughs)
+                    for i in range(window, len(sr_data) - window):
+                        if (sr_data['Low'].iloc[i] == lows.iloc[i] and 
+                            sr_data['Low'].iloc[i] < sr_data['Low'].iloc[i-1] and
+                            sr_data['Low'].iloc[i] < sr_data['Low'].iloc[i+1]):
+                            potential_support.append({
+                                'price': float(sr_data['Low'].iloc[i]),
+                                'date': sr_data.index[i],
+                                'volume': float(sr_data['Volume'].iloc[i])
+                            })
+                    
+                    # Cluster similar levels together
+                    def cluster_levels(levels, current_price):
+                        if not levels:
+                            return []
+                        
+                        clustered = []
+                        levels.sort(key=lambda x: x['price'])
+                        
+                        for level in levels:
+                            # Find if this level can be clustered with existing ones
+                            clustered_with_existing = False
+                            for cluster in clustered:
+                                if abs(level['price'] - cluster['price']) / cluster['price'] <= tolerance:
+                                    # Merge with existing cluster
+                                    total_volume = cluster['volume'] + level['volume']
+                                    weighted_price = (cluster['price'] * cluster['volume'] + 
+                                                    level['price'] * level['volume']) / total_volume
+                                    cluster['price'] = weighted_price
+                                    cluster['volume'] = total_volume
+                                    cluster['tests'] += 1
+                                    if level['date'] > cluster['last_test_date']:
+                                        cluster['last_test_date'] = level['date']
+                                    clustered_with_existing = True
+                                    break
+                            
+                            if not clustered_with_existing:
+                                clustered.append({
+                                    'price': level['price'],
+                                    'volume': level['volume'],
+                                    'tests': 1,
+                                    'last_test_date': level['date']
+                                })
+                        
+                        return clustered
+                    
+                    # Cluster resistance and support levels
+                    current_price = float(hist['Close'].iloc[-1])
+                    clustered_resistance = cluster_levels(potential_resistance, current_price)
+                    clustered_support = cluster_levels(potential_support, current_price)
+                    
+                    # Calculate strength scores for each level
+                    def calculate_strength(level, level_type):
+                        base_strength = min(level['tests'] * 20, 60)  # Tests contribute up to 60 points
+                        
+                        # Volume factor (up to 25 points)
+                        avg_volume = float(sr_data['Volume'].mean())
+                        volume_ratio = self.safe_divide(level['volume'], avg_volume, 0)
+                        volume_factor = min(volume_ratio * 12.5, 25)
+                        
+                        # Recency factor (up to 15 points, more recent = higher score)
+                        days_ago = (sr_data.index[-1] - level['last_test_date']).days
+                        recency_factor = max(15 - (days_ago * 0.3), 0)
+                        
+                        return min(base_strength + volume_factor + recency_factor, 100)
+                    
+                    # Build final support and resistance lists
+                    support_levels = []
+                    resistance_levels = []
+                    
+                    # Process resistance levels (above current price)
+                    for level in clustered_resistance:
+                        if level['price'] > current_price:
+                            strength = calculate_strength(level, 'resistance')
+                            resistance_levels.append({
+                                'price': float(level['price']),
+                                'strength': float(strength),
+                                'volume': float(level['volume']),
+                                'tests': int(level['tests']),
+                                'last_test_date': level['last_test_date'].strftime('%Y-%m-%d'),
+                                'level_type': 'resistance'
+                            })
+                    
+                    # Process support levels (below current price)
+                    for level in clustered_support:
+                        if level['price'] < current_price:
+                            strength = calculate_strength(level, 'support')
+                            support_levels.append({
+                                'price': float(level['price']),
+                                'strength': float(strength),
+                                'volume': float(level['volume']),
+                                'tests': int(level['tests']),
+                                'last_test_date': level['last_test_date'].strftime('%Y-%m-%d'),
+                                'level_type': 'support'
+                            })
+                    
+                    # Sort by strength and keep top 5 of each
+                    resistance_levels.sort(key=lambda x: x['strength'], reverse=True)
+                    support_levels.sort(key=lambda x: x['strength'], reverse=True)
+                    resistance_levels = resistance_levels[:5]
+                    support_levels = support_levels[:5]
+                    
+                    # Find nearest and strongest levels
+                    nearest_support = None
+                    nearest_resistance = None
+                    strongest_support = None
+                    strongest_resistance = None
+                    
+                    if support_levels:
+                        # Find nearest support (closest price below current)
+                        nearest_support = max(support_levels, key=lambda x: x['price'])
+                        strongest_support = max(support_levels, key=lambda x: x['strength'])
+                    
+                    if resistance_levels:
+                        # Find nearest resistance (closest price above current)
+                        nearest_resistance = min(resistance_levels, key=lambda x: x['price'])
+                        strongest_resistance = max(resistance_levels, key=lambda x: x['strength'])
+                    
+                    # Check if price is near any support/resistance (within 1%)
+                    price_near_support = False
+                    price_near_resistance = False
+                    
+                    for level in support_levels:
+                        distance_ratio = self.safe_divide(abs(current_price - level['price']), current_price, 1.0)
+                        if distance_ratio <= 0.01:
+                            price_near_support = True
+                            break
+                    
+                    for level in resistance_levels:
+                        distance_ratio = self.safe_divide(abs(current_price - level['price']), current_price, 1.0)
+                        if distance_ratio <= 0.01:
+                            price_near_resistance = True
+                            break
+                    
+                    support_resistance = {
+                        "support_levels": support_levels,
+                        "resistance_levels": resistance_levels,
+                        "nearest_support": nearest_support,
+                        "nearest_resistance": nearest_resistance,
+                        "price_near_support": price_near_support,
+                        "price_near_resistance": price_near_resistance,
+                        "strongest_support": strongest_support,
+                        "strongest_resistance": strongest_resistance,
+                        "analysis_period_days": analysis_period
+                    }
+                        
+                except Exception as e:
+                    logger.debug(f"Error in Support/Resistance calculation: {e}")
+                    support_resistance = None
+            
             result["teknik_indiktorler"] = {
                 "rsi_14": float(rsi_14) if rsi_14 is not None and not pd.isna(rsi_14) else None,
                 "macd": macd,
@@ -868,7 +1047,8 @@ class YahooFinanceProvider:
                 "adx": float(adx) if adx is not None and not pd.isna(adx) else None,
                 "plus_di": float(plus_di) if plus_di is not None and not pd.isna(plus_di) else None,
                 "minus_di": float(minus_di) if minus_di is not None and not pd.isna(minus_di) else None,
-                "fibonacci_retracement": fibonacci_retracement
+                "fibonacci_retracement": fibonacci_retracement,
+                "support_resistance": support_resistance
             }
             
             # Volume Analysis
@@ -1150,6 +1330,61 @@ class YahooFinanceProvider:
                                 signal_score -= 1.5  # Strong continuation signal
                                 signal_count += 1
             
+            # Support and Resistance signals
+            if support_resistance is not None:
+                current_price = hist['Close'].iloc[-1]
+                tolerance = 0.01  # 1% tolerance for "near" levels
+                
+                # Check if approaching strong support from above (buy signal)
+                nearest_support = support_resistance.get("nearest_support")
+                if nearest_support and current_price > nearest_support['price']:
+                    distance_to_support = self.safe_divide(current_price - nearest_support['price'], current_price, 1.0)
+                    if distance_to_support <= 0.02:  # Within 2% of support
+                        strength_factor = self.safe_divide(nearest_support['strength'], 50, 1.0)  # Scale strength (0-2)
+                        if distance_to_support <= tolerance:
+                            # At support level
+                            signal_score += 2 * strength_factor  # Strong buy signal
+                            signal_count += 1
+                        else:
+                            # Approaching support
+                            signal_score += 1 * strength_factor  # Buy signal
+                            signal_count += 1
+                
+                # Check if approaching strong resistance from below (sell signal)
+                nearest_resistance = support_resistance.get("nearest_resistance")
+                if nearest_resistance and current_price < nearest_resistance['price']:
+                    distance_to_resistance = self.safe_divide(nearest_resistance['price'] - current_price, current_price, 1.0)
+                    if distance_to_resistance <= 0.02:  # Within 2% of resistance
+                        strength_factor = self.safe_divide(nearest_resistance['strength'], 50, 1.0)  # Scale strength (0-2)
+                        if distance_to_resistance <= tolerance:
+                            # At resistance level
+                            signal_score -= 2 * strength_factor  # Strong sell signal
+                            signal_count += 1
+                        else:
+                            # Approaching resistance
+                            signal_score -= 1 * strength_factor  # Sell signal
+                            signal_count += 1
+                
+                # Breakout signals
+                resistance_levels = support_resistance.get("resistance_levels", [])
+                support_levels = support_resistance.get("support_levels", [])
+                
+                # Check for breakout above resistance (bullish)
+                for resistance in resistance_levels:
+                    if current_price > resistance['price'] * 1.01:  # 1% above resistance
+                        strength_factor = self.safe_divide(resistance['strength'], 50, 1.0)
+                        signal_score += 2 * strength_factor  # Bullish breakout
+                        signal_count += 1
+                        break  # Only count the strongest breakout
+                
+                # Check for breakdown below support (bearish)
+                for support in support_levels:
+                    if current_price < support['price'] * 0.99:  # 1% below support
+                        strength_factor = self.safe_divide(support['strength'], 50, 1.0)
+                        signal_score -= 2 * strength_factor  # Bearish breakdown
+                        signal_count += 1
+                        break  # Only count the strongest breakdown
+            
             # Calculate final signal with ADX modifier
             overall_signal = "notr"
             signal_explanation = "Yeterli veri yok"
@@ -1193,21 +1428,65 @@ class YahooFinanceProvider:
                         elif trend_direction == "downtrend" and next_resistance:
                             fib_context += f", sonraki direnç: {next_resistance:.2f}"
                 
+                # Add Support/Resistance context to signal explanation
+                sr_context = ""
+                if support_resistance is not None:
+                    current_price = hist['Close'].iloc[-1]
+                    
+                    # Check for support/resistance proximity
+                    if support_resistance.get("price_near_support"):
+                        nearest_support = support_resistance.get("nearest_support")
+                        if nearest_support:
+                            sr_context = f" (S/R: {nearest_support['price']:.2f} destek yakınında)"
+                    
+                    elif support_resistance.get("price_near_resistance"):
+                        nearest_resistance = support_resistance.get("nearest_resistance")
+                        if nearest_resistance:
+                            sr_context = f" (S/R: {nearest_resistance['price']:.2f} direnç yakınında)"
+                    
+                    else:
+                        # Add nearest levels for context
+                        nearest_support = support_resistance.get("nearest_support")
+                        nearest_resistance = support_resistance.get("nearest_resistance")
+                        
+                        if nearest_support and nearest_resistance:
+                            sr_context = f" (S/R: destek {nearest_support['price']:.2f}, direnç {nearest_resistance['price']:.2f})"
+                        elif nearest_support:
+                            sr_context = f" (S/R: sonraki destek {nearest_support['price']:.2f})"
+                        elif nearest_resistance:
+                            sr_context = f" (S/R: sonraki direnç {nearest_resistance['price']:.2f})"
+                    
+                    # Check for breakouts
+                    resistance_levels = support_resistance.get("resistance_levels", [])
+                    support_levels = support_resistance.get("support_levels", [])
+                    
+                    # Check for breakout above resistance
+                    for resistance in resistance_levels:
+                        if current_price > resistance['price'] * 1.01:
+                            sr_context += f" [Direnç kırılımı: {resistance['price']:.2f}]"
+                            break
+                    
+                    # Check for breakdown below support
+                    for support in support_levels:
+                        if current_price < support['price'] * 0.99:
+                            sr_context += f" [Destek kırılımı: {support['price']:.2f}]"
+                            break
+                
                 if avg_signal >= 1.5:
                     overall_signal = "guclu_al"
-                    signal_explanation = f"Güçlü al sinyali - çoklu gösterge pozitif{adx_context}{fib_context}"
+                    signal_explanation = f"Güçlü al sinyali - çoklu gösterge pozitif{adx_context}{fib_context}{sr_context}"
                 elif avg_signal >= 0.5:
                     overall_signal = "al"
-                    signal_explanation = f"Al sinyali - göstergeler pozitif{adx_context}{fib_context}"
+                    signal_explanation = f"Al sinyali - göstergeler pozitif{adx_context}{fib_context}{sr_context}"
                 elif avg_signal <= -1.5:
                     overall_signal = "guclu_sat"
-                    signal_explanation = f"Güçlü sat sinyali - çoklu gösterge negatif{adx_context}{fib_context}"
+                    signal_explanation = f"Güçlü sat sinyali - çoklu gösterge negatif{adx_context}{fib_context}{sr_context}"
                 elif avg_signal <= -0.5:
                     overall_signal = "sat"
-                    signal_explanation = f"Sat sinyali - göstergeler negatif{adx_context}{fib_context}"
+                    signal_explanation = f"Sat sinyali - göstergeler negatif{adx_context}{fib_context}{sr_context}"
                 else:
                     overall_signal = "notr"
-                    signal_explanation = f"Nötr - karışık sinyaller{adx_context}{fib_context}"
+                    signal_explanation = f"Nötr - karışık sinyaller{adx_context}{fib_context}{sr_context}"
             
             result["al_sat_sinyali"] = overall_signal
             result["sinyal_aciklamasi"] = signal_explanation
