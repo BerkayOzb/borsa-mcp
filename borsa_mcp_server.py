@@ -905,11 +905,21 @@ def generate_expert_investment_commentary(ticker: str, company_name: str, analys
                 commentary.append("%61.8 altın oran seviyesi - güçlü dönüş noktası.\n")
     
     if support_resistance:
-        nearest_support = support_resistance.get("nearest_support")
-        nearest_resistance = support_resistance.get("nearest_resistance")
-        if nearest_support and nearest_resistance:
-            commentary.append(f"\nDestek {nearest_support:.2f} TL, Direnç {nearest_resistance:.2f} TL. ")
-            commentary.append("Bu seviyeleri not edin - kırılımlar önemli sinyaller verir.\n")
+        # Support/resistance might be nested dicts, extract the values properly
+        if isinstance(support_resistance, dict):
+            nearest_support = support_resistance.get("nearest_support")
+            nearest_resistance = support_resistance.get("nearest_resistance")
+            
+            # Extract numeric values if they're dicts
+            if isinstance(nearest_support, dict):
+                nearest_support = nearest_support.get("price") or nearest_support.get("value")
+            if isinstance(nearest_resistance, dict):
+                nearest_resistance = nearest_resistance.get("price") or nearest_resistance.get("value")
+            
+            # Only format if we have numeric values
+            if nearest_support and nearest_resistance and isinstance(nearest_support, (int, float)) and isinstance(nearest_resistance, (int, float)):
+                commentary.append(f"\nDestek {nearest_support:.2f} TL, Direnç {nearest_resistance:.2f} TL. ")
+                commentary.append("Bu seviyeleri not edin - kırılımlar önemli sinyaller verir.\n")
     
     # Market psychology section
     commentary.append("\n💭 PİYASA PSİKOLOJİSİ:\n")
