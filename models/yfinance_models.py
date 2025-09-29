@@ -371,6 +371,9 @@ class TeknikAnalizSonucu(BaseModel):
     al_sat_sinyali: Optional[str] = Field(None, description="Overall signal: 'guclu_al', 'al', 'notr', 'sat', 'guclu_sat'.")
     sinyal_aciklamasi: Optional[str] = Field(None, description="Explanation of the signal.")
     
+    # Expert commentary
+    uzman_yatirim_yorumu: Optional[str] = Field(None, description="Expert investment commentary with market psychology and strategic insights.")
+    
     error_message: Optional[str] = Field(None, description="Error message if the operation failed.")
 
 # --- Sector Analysis Models ---
