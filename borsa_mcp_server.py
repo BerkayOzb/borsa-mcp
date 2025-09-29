@@ -970,8 +970,8 @@ def generate_expert_investment_commentary(ticker: str, company_name: str, analys
                     commentary.append(f"Band genişliği normal (%{bb_width:.1f}).\n")
     
     # Stochastic with technical detail
+    stoch_d = indicators.get("stochastic_d", 50)
     if stoch_k and stoch_d:
-        stoch_d = indicators.get("stochastic_d", 50)
         commentary.append(f"\nStochastic: %K({stoch_k:.1f}) %D({stoch_d:.1f}). ")
         
         if stoch_k < 20 and stoch_d < 20:
