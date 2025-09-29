@@ -776,6 +776,7 @@ def generate_expert_investment_commentary(ticker: str, company_name: str, analys
     # Extract specific indicators
     rsi = indicators.get("rsi_14", 50)
     stoch_k = indicators.get("stochastic_k", 50)
+    stoch_d = indicators.get("stochastic_d", 50)  # Add stoch_d here
     adx = indicators.get("adx", 25)
     current_price = price_analysis.get("guncel_fiyat", 0)
     change_pct = price_analysis.get("degisim_yuzdesi", 0)
@@ -970,7 +971,6 @@ def generate_expert_investment_commentary(ticker: str, company_name: str, analys
                     commentary.append(f"Band genişliği normal (%{bb_width:.1f}).\n")
     
     # Stochastic with technical detail
-    stoch_d = indicators.get("stochastic_d", 50)
     if stoch_k and stoch_d:
         commentary.append(f"\nStochastic: %K({stoch_k:.1f}) %D({stoch_d:.1f}). ")
         
