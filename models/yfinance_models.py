@@ -258,6 +258,35 @@ class SupportResistance(BaseModel):
     strongest_resistance: Optional[SupportResistanceLevel] = Field(None, description="Strongest resistance level.")
     analysis_period_days: int = Field(description="Number of days analyzed for S/R levels.")
 
+class AverageTrueRange(BaseModel):
+    """Average True Range (ATR) analysis for volatility measurement."""
+    atr: Optional[float] = Field(None, description="Average True Range value.")
+    atr_percentage: Optional[float] = Field(None, description="ATR as percentage of current price.")
+    volatility_level: Optional[str] = Field(None, description="Volatility classification: 'low', 'medium', 'high'.")
+    suggested_stop_loss_1x: Optional[float] = Field(None, description="Suggested stop-loss at 1x ATR below current price.")
+    suggested_stop_loss_15x: Optional[float] = Field(None, description="Suggested stop-loss at 1.5x ATR below current price.")
+    suggested_stop_loss_2x: Optional[float] = Field(None, description="Suggested stop-loss at 2x ATR below current price.")
+    daily_range_expectation: Optional[float] = Field(None, description="Expected daily price movement based on ATR.")
+    period: int = Field(14, description="Period used for ATR calculation.")
+
+class VolumeProfileNode(BaseModel):
+    """Volume Profile price-volume node."""
+    price_level: float = Field(description="Price level.")
+    volume: float = Field(description="Volume traded at this price level.")
+    volume_percentage: float = Field(description="Percentage of total volume at this level.")
+
+class VolumeProfile(BaseModel):
+    """Volume Profile analysis for identifying support/resistance based on volume."""
+    point_of_control: Optional[float] = Field(None, description="Price level with highest volume (POC).")
+    value_area_high: Optional[float] = Field(None, description="Upper bound of 70% volume area.")
+    value_area_low: Optional[float] = Field(None, description="Lower bound of 70% volume area.")
+    high_volume_nodes: List[float] = Field(default_factory=list, description="Price levels with high volume concentration (support/resistance).")
+    low_volume_nodes: List[float] = Field(default_factory=list, description="Price levels with low volume (potential breakout zones).")
+    current_volume_percentile: Optional[float] = Field(None, description="Where current price ranks in volume distribution (0-100).")
+    volume_profile_signal: Optional[str] = Field(None, description="Signal: 'high_volume_support', 'low_volume_breakout', 'poc_resistance', etc.")
+    profile_nodes: List[VolumeProfileNode] = Field(default_factory=list, description="Complete volume profile data.")
+    analysis_period_days: int = Field(description="Number of days analyzed for volume profile.")
+
 class TeknikIndiktorler(BaseModel):
     """Technical indicators calculated from price data."""
     rsi_14: Optional[float] = Field(None, description="14-day Relative Strength Index.")
@@ -274,6 +303,8 @@ class TeknikIndiktorler(BaseModel):
     minus_di: Optional[float] = Field(None, description="-DI Directional Indicator - downward price movement strength.")
     fibonacci_retracement: Optional[FibonacciRetracement] = Field(None, description="Fibonacci Retracement levels and analysis.")
     support_resistance: Optional[SupportResistance] = Field(None, description="Support and Resistance levels analysis.")
+    atr_analysis: Optional[AverageTrueRange] = Field(None, description="Average True Range (ATR) volatility analysis.")
+    volume_profile: Optional[VolumeProfile] = Field(None, description="Volume Profile analysis for price-volume relationships.")
 
 class HacimAnalizi(BaseModel):
     """Volume analysis metrics."""

@@ -1034,6 +1034,224 @@ class YahooFinanceProvider:
                     logger.debug(f"Error in Support/Resistance calculation: {e}")
                     support_resistance = None
             
+            # Average True Range (ATR) Calculation
+            atr_analysis = None
+            if len(hist) >= 15:  # Need at least 15 periods for 14-period ATR
+                try:
+                    # Calculate True Range for each period
+                    # TR = max(high-low, abs(high-close_prev), abs(low-close_prev))
+                    atr_period = 14
+                    analysis_data = hist.tail(min(100, len(hist))).copy()  # Use up to 100 days
+                    
+                    # Shift close prices to get previous close
+                    analysis_data['prev_close'] = analysis_data['Close'].shift(1)
+                    
+                    # Calculate True Range components
+                    analysis_data['tr1'] = analysis_data['High'] - analysis_data['Low']
+                    analysis_data['tr2'] = abs(analysis_data['High'] - analysis_data['prev_close'])
+                    analysis_data['tr3'] = abs(analysis_data['Low'] - analysis_data['prev_close'])
+                    
+                    # True Range is the maximum of the three components
+                    analysis_data['true_range'] = analysis_data[['tr1', 'tr2', 'tr3']].max(axis=1)
+                    
+                    # Remove the first row (no previous close available)
+                    analysis_data = analysis_data.dropna()
+                    
+                    if len(analysis_data) >= atr_period:
+                        # Calculate ATR using exponential moving average
+                        # First ATR = simple moving average of first 14 TRs
+                        first_atr = analysis_data['true_range'].head(atr_period).mean()
+                        
+                        # Calculate exponential moving average ATR
+                        atr_values = [first_atr]
+                        alpha = 2 / (atr_period + 1)  # EMA smoothing factor
+                        
+                        for i in range(atr_period, len(analysis_data)):
+                            tr_current = analysis_data['true_range'].iloc[i]
+                            atr_prev = atr_values[-1]
+                            atr_current = (alpha * tr_current) + ((1 - alpha) * atr_prev)
+                            atr_values.append(atr_current)
+                        
+                        # Get the most recent ATR
+                        current_atr = atr_values[-1]
+                        current_price = float(hist['Close'].iloc[-1])
+                        
+                        # Calculate ATR percentage
+                        atr_percentage = self.safe_divide(current_atr, current_price, 0) * 100
+                        
+                        # Determine volatility level
+                        volatility_level = "medium"
+                        if atr_percentage is not None:
+                            if atr_percentage < 1.0:
+                                volatility_level = "low"
+                            elif atr_percentage > 3.0:
+                                volatility_level = "high"
+                        
+                        # Calculate suggested stop-loss levels (for long positions)
+                        suggested_stop_loss_1x = self.safe_float(current_price - current_atr, None)
+                        suggested_stop_loss_15x = self.safe_float(current_price - (1.5 * current_atr), None)
+                        suggested_stop_loss_2x = self.safe_float(current_price - (2.0 * current_atr), None)
+                        
+                        # Daily range expectation (current ATR is expected daily movement)
+                        daily_range_expectation = self.safe_float(current_atr, None)
+                        
+                        atr_analysis = {
+                            "atr": self.safe_float(current_atr, None),
+                            "atr_percentage": self.safe_float(atr_percentage, None),
+                            "volatility_level": volatility_level,
+                            "suggested_stop_loss_1x": suggested_stop_loss_1x,
+                            "suggested_stop_loss_15x": suggested_stop_loss_15x,
+                            "suggested_stop_loss_2x": suggested_stop_loss_2x,
+                            "daily_range_expectation": daily_range_expectation,
+                            "period": atr_period
+                        }
+                        
+                except Exception as e:
+                    logger.debug(f"Error in ATR calculation: {e}")
+                    atr_analysis = None
+            
+            # Volume Profile Calculation
+            volume_profile = None
+            if len(hist) >= 20:  # Need sufficient data for meaningful volume profile
+                try:
+                    profile_period = min(60, len(hist))  # Use up to 60 days for volume profile
+                    vp_data = hist.tail(profile_period).copy()
+                    
+                    # Define price bins for volume profile
+                    price_min = float(vp_data['Low'].min())
+                    price_max = float(vp_data['High'].max())
+                    price_range = price_max - price_min
+                    
+                    if price_range > 0:
+                        # Create 25 price bins
+                        num_bins = 25
+                        bin_size = price_range / num_bins
+                        bins = [price_min + (i * bin_size) for i in range(num_bins + 1)]
+                        
+                        # Calculate volume at each price level
+                        volume_at_price = {}
+                        
+                        for idx, row in vp_data.iterrows():
+                            high = float(row['High'])
+                            low = float(row['Low'])
+                            volume = float(row['Volume'])
+                            
+                            # Distribute volume across price levels within the day's range
+                            relevant_bins = []
+                            for i, bin_start in enumerate(bins[:-1]):
+                                bin_end = bins[i + 1]
+                                # Check if this bin overlaps with the day's price range
+                                if bin_end >= low and bin_start <= high:
+                                    relevant_bins.append((bin_start, bin_end))
+                            
+                            # Distribute volume equally across relevant bins
+                            if relevant_bins:
+                                volume_per_bin = volume / len(relevant_bins)
+                                for bin_start, bin_end in relevant_bins:
+                                    bin_mid = (bin_start + bin_end) / 2
+                                    if bin_mid not in volume_at_price:
+                                        volume_at_price[bin_mid] = 0
+                                    volume_at_price[bin_mid] += volume_per_bin
+                        
+                        if volume_at_price:
+                            # Sort volume data by price
+                            sorted_volume = sorted(volume_at_price.items(), key=lambda x: x[0])
+                            total_volume = sum(volume_at_price.values())
+                            
+                            # Find Point of Control (POC) - price with highest volume
+                            poc_price = max(volume_at_price.items(), key=lambda x: x[1])[0]
+                            
+                            # Calculate Value Area (70% of volume)
+                            target_volume = total_volume * 0.70
+                            
+                            # Start from POC and expand to find value area
+                            poc_index = next(i for i, (price, _) in enumerate(sorted_volume) if price == poc_price)
+                            
+                            value_area_volume = sorted_volume[poc_index][1]
+                            lower_idx = poc_index
+                            upper_idx = poc_index
+                            
+                            # Expand value area to include 70% of volume
+                            while value_area_volume < target_volume and (lower_idx > 0 or upper_idx < len(sorted_volume) - 1):
+                                lower_volume = sorted_volume[lower_idx - 1][1] if lower_idx > 0 else 0
+                                upper_volume = sorted_volume[upper_idx + 1][1] if upper_idx < len(sorted_volume) - 1 else 0
+                                
+                                if lower_volume >= upper_volume and lower_idx > 0:
+                                    lower_idx -= 1
+                                    value_area_volume += lower_volume
+                                elif upper_idx < len(sorted_volume) - 1:
+                                    upper_idx += 1
+                                    value_area_volume += upper_volume
+                                else:
+                                    break
+                            
+                            value_area_low = sorted_volume[lower_idx][0]
+                            value_area_high = sorted_volume[upper_idx][0]
+                            
+                            # Identify High Volume Nodes (HVN) and Low Volume Nodes (LVN)
+                            avg_volume = total_volume / len(volume_at_price)
+                            
+                            high_volume_nodes = []
+                            low_volume_nodes = []
+                            
+                            for price, volume in sorted_volume:
+                                if volume > avg_volume * 1.5:  # 50% above average
+                                    high_volume_nodes.append(float(price))
+                                elif volume < avg_volume * 0.5:  # 50% below average
+                                    low_volume_nodes.append(float(price))
+                            
+                            # Calculate current price volume percentile
+                            current_price = float(hist['Close'].iloc[-1])
+                            volumes_below_current = [vol for price, vol in volume_at_price.items() if price <= current_price]
+                            volume_percentile = (sum(volumes_below_current) / total_volume) * 100 if volumes_below_current else 50
+                            
+                            # Determine volume profile signal
+                            volume_profile_signal = "neutral"
+                            
+                            # Check if current price is near POC
+                            poc_distance = abs(current_price - poc_price) / current_price
+                            if poc_distance <= 0.02:  # Within 2% of POC
+                                if any(abs(current_price - hvn) / current_price <= 0.01 for hvn in high_volume_nodes):
+                                    volume_profile_signal = "high_volume_support"
+                                else:
+                                    volume_profile_signal = "poc_test"
+                            
+                            # Check if in low volume area
+                            elif any(abs(current_price - lvn) / current_price <= 0.01 for lvn in low_volume_nodes):
+                                volume_profile_signal = "low_volume_breakout"
+                            
+                            # Check value area edges
+                            elif abs(current_price - value_area_high) / current_price <= 0.01:
+                                volume_profile_signal = "value_area_high_test"
+                            elif abs(current_price - value_area_low) / current_price <= 0.01:
+                                volume_profile_signal = "value_area_low_test"
+                            
+                            # Create profile nodes for complete data
+                            profile_nodes = []
+                            for price, volume in sorted_volume:
+                                volume_pct = (volume / total_volume) * 100
+                                profile_nodes.append({
+                                    "price_level": float(price),
+                                    "volume": float(volume),
+                                    "volume_percentage": float(volume_pct)
+                                })
+                            
+                            volume_profile = {
+                                "point_of_control": float(poc_price),
+                                "value_area_high": float(value_area_high),
+                                "value_area_low": float(value_area_low),
+                                "high_volume_nodes": high_volume_nodes,
+                                "low_volume_nodes": low_volume_nodes,
+                                "current_volume_percentile": float(volume_percentile),
+                                "volume_profile_signal": volume_profile_signal,
+                                "profile_nodes": profile_nodes,
+                                "analysis_period_days": profile_period
+                            }
+                        
+                except Exception as e:
+                    logger.debug(f"Error in Volume Profile calculation: {e}")
+                    volume_profile = None
+            
             result["teknik_indiktorler"] = {
                 "rsi_14": float(rsi_14) if rsi_14 is not None and not pd.isna(rsi_14) else None,
                 "macd": macd,
@@ -1048,7 +1266,9 @@ class YahooFinanceProvider:
                 "plus_di": float(plus_di) if plus_di is not None and not pd.isna(plus_di) else None,
                 "minus_di": float(minus_di) if minus_di is not None and not pd.isna(minus_di) else None,
                 "fibonacci_retracement": fibonacci_retracement,
-                "support_resistance": support_resistance
+                "support_resistance": support_resistance,
+                "atr_analysis": atr_analysis,
+                "volume_profile": volume_profile
             }
             
             # Volume Analysis
@@ -1385,6 +1605,58 @@ class YahooFinanceProvider:
                         signal_count += 1
                         break  # Only count the strongest breakdown
             
+            # ATR signals
+            if atr_analysis is not None:
+                volatility_level = atr_analysis.get("volatility_level")
+                atr_percentage = atr_analysis.get("atr_percentage")
+                
+                if volatility_level == "high" and short_trend == "yukselis":
+                    # High volatility in uptrend - cautionary signal
+                    signal_score -= 1
+                    signal_count += 1
+                elif volatility_level == "low" and short_trend == "yatay":
+                    # Low volatility in consolidation - potential breakout
+                    signal_score += 1
+                    signal_count += 1
+                
+                # Use ATR for position sizing context (no direct signal, but affects risk)
+                if atr_percentage and atr_percentage > 5.0:  # Very high volatility
+                    signal_score -= 0.5  # Slight negative adjustment for extreme volatility
+                    signal_count += 0.5
+            
+            # Volume Profile signals
+            if volume_profile is not None:
+                vp_signal = volume_profile.get("volume_profile_signal")
+                current_percentile = volume_profile.get("current_volume_percentile", 50)
+                
+                if vp_signal == "high_volume_support":
+                    signal_score += 2  # Strong support signal
+                    signal_count += 1
+                elif vp_signal == "poc_test":
+                    # Point of Control test - direction depends on trend
+                    if short_trend == "yukselis":
+                        signal_score += 1.5  # POC acting as support in uptrend
+                    else:
+                        signal_score -= 1.5  # POC acting as resistance in downtrend
+                    signal_count += 1
+                elif vp_signal == "low_volume_breakout":
+                    signal_score += 1  # Potential for quick movement through low volume area
+                    signal_count += 1
+                elif vp_signal == "value_area_high_test":
+                    signal_score -= 1.5  # Resistance at value area high
+                    signal_count += 1
+                elif vp_signal == "value_area_low_test":
+                    signal_score += 1.5  # Support at value area low
+                    signal_count += 1
+                
+                # Additional signal based on volume percentile
+                if current_percentile < 20:  # Low volume area
+                    signal_score += 0.5  # Potential for quick movement
+                    signal_count += 0.5
+                elif current_percentile > 80:  # High volume area
+                    signal_score += 0.5  # Strong support/resistance area
+                    signal_count += 0.5
+            
             # Calculate final signal with ADX modifier
             overall_signal = "notr"
             signal_explanation = "Yeterli veri yok"
@@ -1472,21 +1744,59 @@ class YahooFinanceProvider:
                             sr_context += f" [Destek kırılımı: {support['price']:.2f}]"
                             break
                 
+                # Add ATR context to signal explanation
+                atr_context = ""
+                if atr_analysis is not None:
+                    volatility_level = atr_analysis.get("volatility_level")
+                    atr_percentage = atr_analysis.get("atr_percentage")
+                    daily_range = atr_analysis.get("daily_range_expectation")
+                    
+                    if atr_percentage is not None:
+                        atr_context = f" (ATR: {atr_percentage:.1f}% volatilite - {volatility_level}"
+                        if daily_range:
+                            atr_context += f", günlük beklenti: ±{daily_range:.2f})"
+                        else:
+                            atr_context += ")"
+                
+                # Add Volume Profile context to signal explanation
+                vp_context = ""
+                if volume_profile is not None:
+                    vp_signal = volume_profile.get("volume_profile_signal")
+                    poc = volume_profile.get("point_of_control")
+                    current_percentile = volume_profile.get("current_volume_percentile")
+                    
+                    if vp_signal != "neutral" and poc is not None:
+                        signal_descriptions = {
+                            "high_volume_support": "yüksek hacim desteği",
+                            "poc_test": "POC testi",
+                            "low_volume_breakout": "düşük hacim kırılımı",
+                            "value_area_high_test": "değer alanı üst sınırı",
+                            "value_area_low_test": "değer alanı alt sınırı"
+                        }
+                        
+                        vp_desc = signal_descriptions.get(vp_signal, vp_signal)
+                        vp_context = f" (VP: {vp_desc}, POC: {poc:.2f}"
+                        
+                        if current_percentile is not None:
+                            vp_context += f", hacim %{current_percentile:.0f})"
+                        else:
+                            vp_context += ")"
+                
                 if avg_signal >= 1.5:
                     overall_signal = "guclu_al"
-                    signal_explanation = f"Güçlü al sinyali - çoklu gösterge pozitif{adx_context}{fib_context}{sr_context}"
+                    signal_explanation = f"Güçlü al sinyali - çoklu gösterge pozitif{adx_context}{fib_context}{sr_context}{atr_context}{vp_context}"
                 elif avg_signal >= 0.5:
                     overall_signal = "al"
-                    signal_explanation = f"Al sinyali - göstergeler pozitif{adx_context}{fib_context}{sr_context}"
+                    signal_explanation = f"Al sinyali - göstergeler pozitif{adx_context}{fib_context}{sr_context}{atr_context}{vp_context}"
                 elif avg_signal <= -1.5:
                     overall_signal = "guclu_sat"
-                    signal_explanation = f"Güçlü sat sinyali - çoklu gösterge negatif{adx_context}{fib_context}{sr_context}"
+                    signal_explanation = f"Güçlü sat sinyali - çoklu gösterge negatif{adx_context}{fib_context}{sr_context}{atr_context}{vp_context}"
                 elif avg_signal <= -0.5:
                     overall_signal = "sat"
-                    signal_explanation = f"Sat sinyali - göstergeler negatif{adx_context}{fib_context}{sr_context}"
+                    signal_explanation = f"Sat sinyali - göstergeler negatif{adx_context}{fib_context}{sr_context}{atr_context}{vp_context}"
                 else:
                     overall_signal = "notr"
-                    signal_explanation = f"Nötr - karışık sinyaller{adx_context}{fib_context}{sr_context}"
+                    signal_explanation = f"Nötr - karışık sinyaller{adx_context}{fib_context}{sr_context}{atr_context}{vp_context}"
             
             result["al_sat_sinyali"] = overall_signal
             result["sinyal_aciklamasi"] = signal_explanation
